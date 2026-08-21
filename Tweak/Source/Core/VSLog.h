@@ -76,7 +76,10 @@ NSString *VSRedact(NSString *line);
 
 @end
 
-#define VSLogD(tag, ...) [[VSLog shared] log:VSLogLevelDebug tag:tag fmt:__VA_ARGS__]
-#define VSLogI(tag, ...) [[VSLog shared] log:VSLogLevelInfo  tag:tag fmt:__VA_ARGS__]
-#define VSLogW(tag, ...) [[VSLog shared] log:VSLogLevelWarn  tag:tag fmt:__VA_ARGS__]
-#define VSLogE(tag, ...) [[VSLog shared] log:VSLogLevelError tag:tag fmt:__VA_ARGS__]
+// The parameter is deliberately named _t and not `tag`: a macro parameter named
+// `tag` is also substituted in the selector keyword `tag:`, expanding
+// `tag:tag` into `@"boot":@"boot"` — a syntax error at every call site.
+#define VSLogD(_t, ...) [[VSLog shared] log:VSLogLevelDebug tag:_t fmt:__VA_ARGS__]
+#define VSLogI(_t, ...) [[VSLog shared] log:VSLogLevelInfo  tag:_t fmt:__VA_ARGS__]
+#define VSLogW(_t, ...) [[VSLog shared] log:VSLogLevelWarn  tag:_t fmt:__VA_ARGS__]
+#define VSLogE(_t, ...) [[VSLog shared] log:VSLogLevelError tag:_t fmt:__VA_ARGS__]
