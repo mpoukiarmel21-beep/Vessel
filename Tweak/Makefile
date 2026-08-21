@@ -27,7 +27,13 @@ VESSEL_PHASE1 = \
 	Source/Core/VSPaths.m \
 	Source/Core/VSStore.m
 
-Vessel_FILES = $(VESSEL_PHASE1)
+# Phase 2 : identite par container + liste des containers.
+VESSEL_PHASE2 = \
+	Source/Core/VSIdentity.m \
+	Source/Core/VSContainer.m \
+	Source/Core/VSManager.m
+
+Vessel_FILES = $(VESSEL_PHASE1) $(VESSEL_PHASE2)
 
 Vessel_CFLAGS = -fobjc-arc \
 	-I$(THEOS_PROJECT_DIR)/Source \

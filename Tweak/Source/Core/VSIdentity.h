@@ -67,6 +67,22 @@
 @property (nonatomic, copy) NSString *languageID;    // "fr-FR"
 @property (nonatomic, copy) NSString *timeZoneID;    // "Europe/Paris"
 
+#pragma mark - Real hardware snapshot
+
+/// Captures the genuine hardware facts. MUST be called from the bootstrap
+/// before VSHookDevice is installed: fishhook rebinds sysctlbyname for the whole
+/// image, our own calls included, so any read taken afterwards would return the
+/// spoofed value of the active container — and a container created later would
+/// inherit the previous container's identity.
++ (void)snapshotRealHardware;
+
++ (NSString *)realMachine;      // "iPhone12,1"
++ (NSString *)realBoardID;      // "N104AP"
++ (NSString *)realOSVersion;    // kern.osproductversion, "26.6.1"
++ (NSString *)realOSBuild;      // kern.osversion, "23G83"
++ (unsigned long long)realMemSize;
++ (int)realCPUCount;
+
 #pragma mark - Lifecycle
 
 /// Picks a model whose native screen matches `pxSize`/`scale` and that can run
@@ -83,6 +99,23 @@
 
 + (instancetype)identityWithDictionary:(NSDictionary *)d;
 - (NSDictionary *)dictionaryRepresentation;
+
+/// Native portrait pixel size and scale of a known model, read from the built-in
+/// table. CGSizeZero when the model is unknown. Constructor-safe: it never
+/// touches UIKit, so an identity can be generated before UIApplication exists —
+/// which matters because the device hooks need one at bootstrap and UIScreen is
+/// not dependable that early.
++ (CGSize)nativePixelSizeForMachine:(NSString *)machine scale:(CGFloat *)outScale;
+
+/// Same, for the real device. Requires +snapshotRealHardware.
++ (CGSize)realNativePixelSize:(CGFloat *)outScale;
+
+/// Generate using the real device's own geometry and OS version. This is the
+/// call sites use in practice; the long form exists for the UI, which knows the
+/// live UIScreen values.
++ (instancetype)generateForRealDeviceWithLocale:(NSString *)localeID
+                                       timeZone:(NSString *)timeZoneID
+                                          taken:(NSSet<NSString *> *)taken;
 
 /// Every value that must be unique across containers, for collision checks.
 - (NSSet<NSString *> *)uniqueValues;

@@ -11,14 +11,16 @@
 //    1. capture the real home            (nothing may redirect before this)
 //    2. bring up logging + crash capture (so later failures are recorded)
 //    3. safe-mode decision               (2 crashed boots in a row => hooks off)
-//    4. load persistent state
-//    5. install hooks, cheapest/safest first
-//    6. schedule UI once UIApplication exists
+//    4. snapshot the REAL hardware       (before any sysctl rebinding exists)
+//    5. load containers, resolve the active one
+//    6. install hooks, cheapest/safest first
+//    7. schedule UI once UIApplication exists
 
 #import <UIKit/UIKit.h>
 #import "Core/VSLog.h"
 #import "Core/VSPaths.h"
-#import "Core/VSStore.h"
+#import "Core/VSIdentity.h"
+#import "Core/VSManager.h"
 
 /// Set when the crash streak trips the breaker. Modules must consult this and
 /// no-op rather than install anything.
@@ -51,19 +53,26 @@ static void VSBootstrapMain(void) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{ [log markBootSucceeded]; });
 
-    // --- 4. persistent state --------------------------------------------
-    // (VSManager arrives in phase 2; for now prove the store round-trips.)
-    VSStore *state = [[VSStore alloc] initWithPath:[VSPaths statePath] label:@"state"];
-    [state attachLifecycleFlush];
-    NSInteger boots = [[state objectForKey:@"bootCount"] integerValue] + 1;
-    [state setObject:@(boots) forKey:@"bootCount"];
-    [state setObject:@"1" forKey:@"schema"];
-    [state flushNow];
+    // --- 4. genuine hardware facts --------------------------------------
+    // Must happen before VSHookDevice rebinds sysctlbyname for the whole image:
+    // afterwards even our own reads return the active container's spoofed values,
+    // and a container created later would inherit the previous one's identity.
+    [VSIdentity snapshotRealHardware];
+
+    // --- 5. containers ---------------------------------------------------
+    // Runs even in safe mode: it installs nothing, and the diagnostics UI needs a
+    // container list. What safe mode suppresses is step 6.
+    [VSManager.shared bootstrapBeforeHooks];
+    VSContainer *active = VSManager.shared.active;
     [log breadcrumb:VSBootStepStoreLoaded
-               note:[NSString stringWithFormat:@"state ok, boot #%ld", (long)boots]];
+               note:[NSString stringWithFormat:@"boot #%ld, active=%@ (%@), %lu container(s)",
+                     (long)VSManager.shared.bootCount, active.name, active.cid,
+                     (unsigned long)VSManager.shared.containers.count]];
+    VSLogI(@"boot", @"identity: %@", active.identity.shortDescription);
 
     VSLogI(@"boot", @"Vessel ready (safeMode=%@)", VSSafeModeActive ? @"YES" : @"NO");
 }
+
 
 __attribute__((constructor))
 static void VSEntry(void) {
