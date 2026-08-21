@@ -7,6 +7,8 @@
 #import "VSContainer.h"
 #import "VSManager.h"
 #import "VSLog.h"
+#import "../Hooks/VSHookHome.h"
+#import "../Hooks/VSHookKeychain.h"
 #import <UIKit/UIKit.h>
 #import <math.h>
 
@@ -233,6 +235,27 @@ static void VSTestContainers(void) {
             active.name, active.cid, active.identity.shortDescription]);
 }
 
+#pragma mark - 4. Isolation layers
+
+/// Layers 1 (filesystem) and 2 (keychain) verify themselves through their own
+/// +firstLeak, which do physical write-then-read-back probes rather than trusting
+/// our own bookkeeping: layer 1 writes through the redirected Documents path and
+/// looks for the bytes at the container path computed independently; layer 2
+/// stores a keychain item through the public API and proves securityd holds it
+/// only under the namespaced service. In safe mode the hooks are deliberately
+/// absent, so "not installed" is the expected state and is a note, not a failure.
+static void VSTestIsolation(void) {
+    if (VSSafeModeActive) {
+        VSNote(@"isolation: hooks disabled (safe mode) — layer 1/2 checks skipped");
+        return;
+    }
+    NSString *l1 = [VSHookHome firstLeak];
+    VSCheck(l1 == nil, @"isolation/layer1-filesystem", l1);
+
+    NSString *l2 = [VSHookKeychain firstLeak];
+    VSCheck(l2 == nil, @"isolation/layer2-keychain", l2);
+}
+
 #pragma mark - Report
 
 static NSString *VSHeader(void) {
@@ -296,6 +319,7 @@ static void VSTestScreenLate(void) {
         VSTestStore();
         VSTestIdentity();
         VSTestContainers();
+        VSTestIsolation();
     } @catch (NSException *e) {
         // A self-test that could crash Instagram would be worse than no
         // self-test, so its own failure is just another FAIL line.

@@ -23,6 +23,8 @@
 #import "Core/VSIdentity.h"
 #import "Core/VSManager.h"
 #import "Core/VSSelfTest.h"
+#import "Hooks/VSHookHome.h"
+#import "Hooks/VSHookKeychain.h"
 
 /// Set when the crash streak trips the breaker. Modules must consult this and
 /// no-op rather than install anything.
@@ -71,6 +73,30 @@ static void VSBootstrapMain(void) {
                      (long)VSManager.shared.bootCount, active.name, active.cid,
                      (unsigned long)VSManager.shared.containers.count]];
     VSLogI(@"boot", @"identity: %@", active.identity.shortDescription);
+
+    // --- 6. isolation hooks, cheapest/safest first -----------------------
+    // Skipped entirely in safe mode: two crashed boots in a row means we let
+    // Instagram run unmodified until the user recovers, rather than risk a third.
+    // All-or-nothing: if HOME (layer 1) refuses, the keychain is left shared too,
+    // so the app runs fully unmodified on its real state instead of half-isolated
+    // (split keychain over a shared filesystem is a state nobody has tested).
+    if (!VSSafeModeActive) {
+        BOOL home = [VSHookHome installForContainerRoot:active.rootPath];
+        [log breadcrumb:VSBootStepHomeHooked
+                   note:(home ? [NSString stringWithFormat:@"HOME -> %@", active.rootPath]
+                              : @"HOME install refused — running unmodified")];
+        if (!home) VSLogE(@"boot", @"layer 1 (HOME) did not install — containers are NOT isolated");
+
+        BOOL keys = home ? [VSHookKeychain installForContainerID:active.cid] : NO;
+        [log breadcrumb:VSBootStepKeychainHooked
+                   note:(keys ? [NSString stringWithFormat:@"keychain ns=%@",
+                                 [VSHookKeychain namespacePrefix]]
+                              : (home ? @"keychain install refused" : @"skipped (HOME refused)"))];
+        if (home && !keys)
+            VSLogE(@"boot", @"layer 2 (keychain) did not install — sessions may leak between containers");
+    } else {
+        [log breadcrumb:VSBootStepHomeHooked note:@"skipped (safe mode)"];
+    }
 
     // --- 7. self-test ----------------------------------------------------
     // Runs last so it can verify what the earlier steps installed; the hooks of

@@ -34,7 +34,13 @@ VESSEL_PHASE2 = \
 	Source/Core/VSManager.m \
 	Source/Core/VSSelfTest.m
 
-Vessel_FILES = $(VESSEL_PHASE1) $(VESSEL_PHASE2)
+# Phase 3 : isolation couche 1 (filesystem) + couche 2 (keychain). C'est la
+# couche 2 qui corrige « le compte disparait » et « les comptes se melangent ».
+VESSEL_PHASE3 = \
+	Source/Hooks/VSHookHome.m \
+	Source/Hooks/VSHookKeychain.m
+
+Vessel_FILES = $(VESSEL_PHASE1) $(VESSEL_PHASE2) $(VESSEL_PHASE3)
 
 Vessel_CFLAGS = -fobjc-arc \
 	-I$(THEOS_PROJECT_DIR)/Source \
