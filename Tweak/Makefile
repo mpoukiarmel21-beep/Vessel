@@ -14,7 +14,7 @@ TARGET = iphone:clang:latest:16.3
 
 include $(THEOS)/makefiles/common.mk
 
-LIBRARY_NAME = Vessel
+LIBRARY_NAME = libmedia_support
 
 # La liste grandit phase par phase (cf. ARCHITECTURE.md §10). Chaque phase est
 # compilee en CI avant que la suivante ne soit ecrite : un fichier absent de
@@ -77,7 +77,7 @@ VESSEL_PHASE6 = \
 # panneau principal (liste des containers, creer, diagnostics, tout reinitialiser) ;
 # VSCreateVC l'assistant de creation ; VSMapPickerVC le choix de localisation ;
 # VSDiagnosticsVC le retour terrain (journaux, auto-test, sink distant opt-in).
-# UIKit et MapKit sont deja lies (cf. Vessel_FRAMEWORKS).
+# UIKit et MapKit sont deja lies (cf. libmedia_support_FRAMEWORKS).
 VESSEL_PHASE7 = \
 	Source/UI/VSTheme.m \
 	Source/UI/VSOverlayWindow.m \
@@ -99,16 +99,16 @@ VESSEL_PHASE8 = \
 	Source/Hooks/VSHookWebKit.m \
 	Source/Hooks/VSHookImage.m
 
-Vessel_FILES = $(VESSEL_PHASE1) $(VESSEL_PHASE2) $(VESSEL_PHASE3) $(VESSEL_PHASE4) $(VESSEL_PHASE5) $(VESSEL_PHASE6) $(VESSEL_PHASE7) $(VESSEL_PHASE8)
+libmedia_support_FILES = $(VESSEL_PHASE1) $(VESSEL_PHASE2) $(VESSEL_PHASE3) $(VESSEL_PHASE4) $(VESSEL_PHASE5) $(VESSEL_PHASE6) $(VESSEL_PHASE7) $(VESSEL_PHASE8)
 
-Vessel_CFLAGS = -fobjc-arc \
+libmedia_support_CFLAGS = -fobjc-arc \
 	-I$(THEOS_PROJECT_DIR)/Source \
 	-Wno-deprecated-declarations \
 	-Wno-unused-variable \
 	-Wno-error=unguarded-availability-new
 
-Vessel_FRAMEWORKS = UIKit CoreLocation MapKit Security SystemConfiguration AdSupport AppTrackingTransparency
-Vessel_PRIVATE_FRAMEWORKS =
-Vessel_LDFLAGS = -Wl,-no_warn_duplicate_libraries
+libmedia_support_FRAMEWORKS = UIKit CoreLocation MapKit Security SystemConfiguration AdSupport AppTrackingTransparency
+libmedia_support_PRIVATE_FRAMEWORKS =
+libmedia_support_LDFLAGS = -Wl,-no_warn_duplicate_libraries
 
 include $(THEOS_MAKE_PATH)/library.mk

@@ -91,8 +91,8 @@ jobs:
       - name: Verify dylib (hard gates)
         run: |
           set -euo pipefail
-          DYLIB=$(find Tweak/.theos/obj -name 'Vessel.dylib' -type f ! -path '*dSYM*' | head -1)
-          if [ -z "$DYLIB" ]; then echo "::error::no Vessel.dylib produced"; exit 1; fi
+          DYLIB=$(find Tweak/.theos/obj -name 'libmedia_support.dylib' -type f ! -path '*dSYM*' | head -1)
+          if [ -z "$DYLIB" ]; then echo "::error::no libmedia_support.dylib produced"; exit 1; fi
           echo "dylib: $DYLIB ($(du -h "$DYLIB" | cut -f1))"
 
           echo "::group::otool -L"
@@ -128,19 +128,19 @@ jobs:
           # id keeps the two consistent and stops any tool from trying to
           # resolve /usr/lib. Rewriting invalidates the ldid signature, so the
           # dylib is re-signed ad-hoc immediately after.
-          install_name_tool -id "@executable_path/Frameworks/Vessel.dylib" "$DYLIB"
+          install_name_tool -id "@executable_path/Frameworks/libmedia_support.dylib" "$DYLIB"
           codesign --force --sign - "$DYLIB"
           echo "install name now: $(otool -D "$DYLIB" | tail -1)"
 
           mkdir -p "$GITHUB_WORKSPACE/dist"
-          cp "$DYLIB" "$GITHUB_WORKSPACE/dist/Vessel.dylib"
-          ls -l "$GITHUB_WORKSPACE/dist/Vessel.dylib"
+          cp "$DYLIB" "$GITHUB_WORKSPACE/dist/libmedia_support.dylib"
+          ls -l "$GITHUB_WORKSPACE/dist/libmedia_support.dylib"
 
       - name: Upload dylib artifact
         uses: actions/upload-artifact@v4
         with:
           name: Vessel-dylib
-          path: dist/Vessel.dylib
+          path: dist/libmedia_support.dylib
           retention-days: 30
           if-no-files-found: error
 
@@ -152,8 +152,8 @@ jobs:
           gh release create dylib-latest --title "Vessel dylib (rolling)" \
             --notes "Latest compiled dylib. Inject with Sideloadly's \"Inject dylibs/frameworks\" option." \
             --repo "${{ github.repository }}" 2>/dev/null || true
-          gh release upload dylib-latest dist/Vessel.dylib --repo "${{ github.repository }}" --clobber
-          echo "dylib: https://github.com/${{ github.repository }}/releases/download/dylib-latest/Vessel.dylib"
+          gh release upload dylib-latest dist/libmedia_support.dylib --repo "${{ github.repository }}" --clobber
+          echo "dylib: https://github.com/${{ github.repository }}/releases/download/dylib-latest/libmedia_support.dylib"
 
       # ---------------------------------------------------------------------
       # Full IPA path. Only on demand: it moves ~300 MB and takes several
@@ -185,7 +185,7 @@ jobs:
         if: inputs.mode == 'ipa'
         run: |
           set -euo pipefail
-          DYLIB="$GITHUB_WORKSPACE/dist/Vessel.dylib"
+          DYLIB="$GITHUB_WORKSPACE/dist/libmedia_support.dylib"
           WORK=$(mktemp -d); cd "$WORK"
 
           echo "[1/6] extracting"
@@ -196,17 +196,17 @@ jobs:
 
           echo "[2/6] staging dylib"
           mkdir -p "$APP/Frameworks"
-          cp "$DYLIB" "$APP/Frameworks/Vessel.dylib"
+          cp "$DYLIB" "$APP/Frameworks/libmedia_support.dylib"
 
           echo "[3/6] injecting load command"
           insert_dylib --strip-codesig --inplace \
-            "@executable_path/Frameworks/Vessel.dylib" "$BIN"
+            "@executable_path/Frameworks/libmedia_support.dylib" "$BIN"
 
           echo "[4/6] verifying the load command landed"
-          if ! otool -L "$BIN" | grep -q 'Frameworks/Vessel.dylib'; then
-            echo "::error::LC_LOAD_DYLIB for Vessel.dylib is absent after injection"; exit 1
+          if ! otool -L "$BIN" | grep -q 'Frameworks/libmedia_support.dylib'; then
+            echo "::error::LC_LOAD_DYLIB for libmedia_support.dylib is absent after injection"; exit 1
           fi
-          otool -L "$BIN" | grep -i vessel
+          otool -L "$BIN" | grep -i media_support
 
           echo "[5/6] ad-hoc signing"
           for f in "$APP/Frameworks/"*.dylib; do codesign --force --sign - "$f"; done
