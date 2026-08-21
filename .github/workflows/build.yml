@@ -81,7 +81,9 @@ jobs:
           export THEOS=~/theos
           cd Tweak
           make clean
-          make -j"$(sysctl -n hw.ncpu)" 2>&1 | tee /tmp/build.log
+          # FINALPACKAGE=1 => optimised, stripped build under .theos/obj/
+          # instead of the unoptimised .theos/obj/debug/ variant.
+          make -j"$(sysctl -n hw.ncpu)" FINALPACKAGE=1 2>&1 | tee /tmp/build.log
           echo "::group::built artefacts"
           find .theos/obj -name '*.dylib' -type f
           echo "::endgroup::"
@@ -120,11 +122,25 @@ jobs:
           # Informational: the install name Sideloadly/insert_dylib will see.
           echo "install name: $(otool -D "$DYLIB" | tail -1)"
 
+          # Theos gives a library the install name /usr/lib/<name>.dylib, which
+          # is a jailbreak convention. dyld resolves an injected dylib through
+          # the LC_LOAD_DYLIB path, so this is cosmetic — but an @executable_path
+          # id keeps the two consistent and stops any tool from trying to
+          # resolve /usr/lib. Rewriting invalidates the ldid signature, so the
+          # dylib is re-signed ad-hoc immediately after.
+          install_name_tool -id "@executable_path/Frameworks/Vessel.dylib" "$DYLIB"
+          codesign --force --sign - "$DYLIB"
+          echo "install name now: $(otool -D "$DYLIB" | tail -1)"
+
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          cp "$DYLIB" "$GITHUB_WORKSPACE/dist/Vessel.dylib"
+          ls -l "$GITHUB_WORKSPACE/dist/Vessel.dylib"
+
       - name: Upload dylib artifact
         uses: actions/upload-artifact@v4
         with:
           name: Vessel-dylib
-          path: Tweak/.theos/obj/**/Vessel.dylib
+          path: dist/Vessel.dylib
           retention-days: 30
           if-no-files-found: error
 
@@ -133,12 +149,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          DYLIB=$(find Tweak/.theos/obj -name 'Vessel.dylib' -type f ! -path '*dSYM*' | head -1)
-          cp "$DYLIB" /tmp/Vessel.dylib
           gh release create dylib-latest --title "Vessel dylib (rolling)" \
             --notes "Latest compiled dylib. Inject with Sideloadly's \"Inject dylibs/frameworks\" option." \
             --repo "${{ github.repository }}" 2>/dev/null || true
-          gh release upload dylib-latest /tmp/Vessel.dylib --repo "${{ github.repository }}" --clobber
+          gh release upload dylib-latest dist/Vessel.dylib --repo "${{ github.repository }}" --clobber
           echo "dylib: https://github.com/${{ github.repository }}/releases/download/dylib-latest/Vessel.dylib"
 
       # ---------------------------------------------------------------------
@@ -171,7 +185,7 @@ jobs:
         if: inputs.mode == 'ipa'
         run: |
           set -euo pipefail
-          DYLIB=$(find "$GITHUB_WORKSPACE/Tweak/.theos/obj" -name 'Vessel.dylib' -type f ! -path '*dSYM*' | head -1)
+          DYLIB="$GITHUB_WORKSPACE/dist/Vessel.dylib"
           WORK=$(mktemp -d); cd "$WORK"
 
           echo "[1/6] extracting"
