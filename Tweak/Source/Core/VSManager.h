@@ -61,10 +61,15 @@ extern NSString *const VSContainersDidChangeNotification;
 /// cid chosen for the next launch, or nil when it equals the active one.
 - (NSString *)pendingContainerID;
 
-/// Wipes every container, the list, and the active selection, then recreates an
-/// empty default container. Diagnostics logs are deliberately kept: they live
-/// outside the containers and are what makes a post-mortem possible.
-- (BOOL)resetEverythingWithError:(NSError **)err;
+/// Arms a full reset for the NEXT launch and returns immediately. Nothing on
+/// disk is touched now: the live container's tree is the running app's HOME, and
+/// deleting it under a running Instagram is exactly how the app ends up frozen on
+/// a half-dead session. The actual wipe (every container, the list, the active
+/// selection) happens in -bootstrapBeforeHooks before any hook or HOME redirect,
+/// then an empty default container is recreated. Diagnostics logs are kept: they
+/// live outside the containers and are what makes a post-mortem possible.
+/// Returns NO only if the flag could not be flushed to disk.
+- (BOOL)armFullReset;
 
 /// Every identifier already in use, for collision-free generation.
 - (NSSet<NSString *> *)takenIdentifierValues;

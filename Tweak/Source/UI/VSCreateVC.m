@@ -10,8 +10,6 @@
 @interface VSCreateVC () <UITextFieldDelegate>
 @property (nonatomic, strong) UIStackView *stack;
 @property (nonatomic, strong) UITextField *nameField;
-@property (nonatomic, copy)   NSString *pickedHex;
-@property (nonatomic, strong) NSMutableArray<UIButton *> *swatches;
 @property (nonatomic, strong) VSIdentity *previewIdentity;
 @property (nonatomic, strong) UILabel *identityLabel;
 @property (nonatomic, strong) UILabel *locationValueLabel;
@@ -27,8 +25,6 @@
     [super viewDidLoad];
     self.title = @"Nouveau container";
     self.view.backgroundColor = UIColor.systemGroupedBackgroundColor;
-    self.swatches = [NSMutableArray array];
-    self.pickedHex = VSTheme.paletteHex.firstObject;
 
     self.navigationItem.leftBarButtonItem =
         [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemCancel
@@ -60,7 +56,7 @@
         [self.stack.trailingAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.trailingAnchor constant:-16],
     ]];
 
-    [self buildNameColorSection];
+    [self buildNameSection];
     [self buildIdentitySection];
     [self buildLocationSection];
 }
@@ -91,13 +87,9 @@
     [self.stack addArrangedSubview:card];
 }
 
-#pragma mark - 1 · Name & color
+#pragma mark - 1 · Name
 
-- (void)buildNameColorSection {
-    UIStackView *col = [UIStackView new];
-    col.axis = UILayoutConstraintAxisVertical;
-    col.spacing = 12;
-
+- (void)buildNameSection {
     self.nameField = [UITextField new];
     self.nameField.placeholder = @"Nom du container";
     self.nameField.font = [VSTheme fontBody];
@@ -107,49 +99,7 @@
     self.nameField.clearButtonMode = UITextFieldViewModeWhileEditing;
     self.nameField.returnKeyType = UIReturnKeyDone;
     self.nameField.delegate = self;
-    [col addArrangedSubview:self.nameField];
-
-    [col addArrangedSubview:[self buildSwatchRow]];
-    [self addSection:@"1 · Nom & couleur" content:col];
-    [self highlightSelectedSwatch];
-}
-
-- (UIStackView *)buildSwatchRow {
-    UIStackView *row = [UIStackView new];
-    row.axis = UILayoutConstraintAxisHorizontal;
-    row.distribution = UIStackViewDistributionFillEqually;
-    row.spacing = 8;
-    NSArray<NSString *> *palette = [VSTheme paletteHex];
-    for (NSInteger i = 0; i < (NSInteger)palette.count; i++) {
-        UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
-        b.tag = i;
-        b.backgroundColor = [VSTheme colorFromHex:palette[i]];
-        b.layer.cornerRadius = 15;
-        b.layer.borderColor = [VSTheme primaryText].CGColor;
-        [b.heightAnchor constraintEqualToConstant:30].active = YES;
-        [b addTarget:self action:@selector(swatchTapped:)
-            forControlEvents:UIControlEventTouchUpInside];
-        [self.swatches addObject:b];
-        [row addArrangedSubview:b];
-    }
-    return row;
-}
-
-- (void)swatchTapped:(UIButton *)b {
-    self.pickedHex = [VSTheme paletteHex][b.tag];
-    [self highlightSelectedSwatch];
-    [VSTheme hapticTap];
-}
-
-/// Ring + slight enlargement on the chosen swatch, so the selection reads even
-/// for users who cannot tell two adjacent hues apart.
-- (void)highlightSelectedSwatch {
-    for (UIButton *b in self.swatches) {
-        BOOL on = [[VSTheme paletteHex][b.tag] isEqualToString:self.pickedHex];
-        b.layer.borderWidth = on ? 3 : 0;
-        b.transform = on ? CGAffineTransformMakeScale(1.12, 1.12)
-                         : CGAffineTransformIdentity;
-    }
+    [self addSection:@"1 · Nom" content:self.nameField];
 }
 
 #pragma mark - 2 · Device identity
@@ -308,7 +258,6 @@
     // What the user previewed IS what ships: replace the manager's own identity
     // with the previewed one (both collision-checked against the same set).
     if (self.previewIdentity) c.identity = self.previewIdentity;
-    c.colorHex = self.pickedHex;
     if (self.locationChosen) {
         c.locationEnabled = YES;
         c.latitude = self.pLat;

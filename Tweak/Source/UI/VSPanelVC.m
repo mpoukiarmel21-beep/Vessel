@@ -30,7 +30,10 @@ typedef NS_ENUM(NSInteger, VSPanelSection) {
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.title = @"Vessel";
-    self.view.backgroundColor = UIColor.systemGroupedBackgroundColor;
+    // Translucent: the view itself is clear and a frosted material sits behind the
+    // table, so Instagram shows through softly. Cells are made clear in cellForRow
+    // so the blur is what the rows float on — the "un peu translucide" look.
+    self.view.backgroundColor = UIColor.clearColor;
     self.navigationItem.leftBarButtonItem =
         [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemClose
                                                       target:self action:@selector(closeTapped)];
@@ -38,6 +41,8 @@ typedef NS_ENUM(NSInteger, VSPanelSection) {
     self.tableView = [[UITableView alloc] initWithFrame:self.view.bounds
                                                   style:UITableViewStyleInsetGrouped];
     self.tableView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    self.tableView.backgroundColor = UIColor.clearColor;
+    self.tableView.backgroundView = [[UIVisualEffectView alloc] initWithEffect:[VSTheme panelBlur]];
     self.tableView.dataSource = self;
     self.tableView.delegate = self;
     [self.view addSubview:self.tableView];
@@ -175,12 +180,16 @@ typedef NS_ENUM(NSInteger, VSPanelSection) {
         if (!cell) cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
                                                  reuseIdentifier:@"acct"];
         VSContainer *c = self.containers[ip.row];
+        BOOL active = [c.cid isEqualToString:VSManager.shared.active.cid];
+        cell.backgroundColor = UIColor.clearColor;
         cell.textLabel.text = c.name;
         cell.textLabel.font = [VSTheme fontHeadline];
         cell.detailTextLabel.text = [self subtitleForContainer:c];
         cell.detailTextLabel.textColor = [VSTheme secondaryText];
-        cell.imageView.image = [self dotImage:[VSTheme colorForContainer:c]];
-        BOOL active = [c.cid isEqualToString:VSManager.shared.active.cid];
+        // Monochrome: the active account is the one tinted with the brand color,
+        // every other is a neutral grey. No more per-account rainbow.
+        cell.imageView.image = [self dotImage:(active ? [VSTheme accent]
+                                                      : UIColor.systemGray3Color)];
         cell.accessoryType = active ? UITableViewCellAccessoryCheckmark
                                     : UITableViewCellAccessoryNone;
         return cell;
@@ -189,6 +198,7 @@ typedef NS_ENUM(NSInteger, VSPanelSection) {
         UITableViewCell *cell = [tv dequeueReusableCellWithIdentifier:@"action"];
         if (!cell) cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
                                                  reuseIdentifier:@"action"];
+        cell.backgroundColor = UIColor.clearColor;
         if (ip.row == 0) {
             cell.textLabel.text = @"＋  Créer un conteneur";
             cell.textLabel.textColor = [VSTheme accent];
@@ -205,6 +215,7 @@ typedef NS_ENUM(NSInteger, VSPanelSection) {
     UITableViewCell *cell = [tv dequeueReusableCellWithIdentifier:@"reset"];
     if (!cell) cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
                                              reuseIdentifier:@"reset"];
+    cell.backgroundColor = UIColor.clearColor;
     cell.textLabel.text = @"⟲  Tout réinitialiser";
     cell.textLabel.textColor = [VSTheme danger];
     cell.textLabel.font = [VSTheme fontHeadline];
@@ -314,12 +325,15 @@ typedef NS_ENUM(NSInteger, VSPanelSection) {
 }
 
 - (void)performReset {
-    NSError *e = nil;
-    if ([VSManager.shared resetEverythingWithError:&e]) {
+    // Arm-and-relaunch: the wipe happens at next boot, before HOME is redirected,
+    // so we never delete the live container out from under the running app (the
+    // old in-session reset did, which is why it appeared to "do nothing" then
+    // wedge). armFullReset only records intent and flushes it.
+    if ([VSManager.shared armFullReset]) {
         [VSTheme hapticSuccess];
         [VSUIController relaunchToApplyContainerSwitch];
     } else {
-        [self alert:@"Échec" message:e.localizedDescription ?: @"Réinitialisation impossible."];
+        [self alert:@"Échec" message:@"La réinitialisation n'a pas pu être programmée."];
     }
 }
 

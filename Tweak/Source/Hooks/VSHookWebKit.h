@@ -37,6 +37,14 @@
 /// cid, when WebKit is absent, or on an OS without per-identifier data stores.
 + (BOOL)installForContainerID:(NSString *)cid;
 
+/// Log-only observability shim used when full isolation is disabled. Swizzles the
+/// same +[WKWebsiteDataStore defaultDataStore] but only records the first time
+/// Instagram asks for the web data store (revealing whether a flow such as signup
+/// runs through a web view) and then returns the genuine default store. Holds no
+/// lock and builds no store, so it cannot wedge. Idempotent; no-op if the full
+/// isolation is already installed.
++ (void)installProbe;
+
 + (BOOL)isInstalled;
 
 /// Deletes a container's WebKit storage from disk (cookies, localStorage, caches).

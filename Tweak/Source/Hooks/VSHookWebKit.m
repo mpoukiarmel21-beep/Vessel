@@ -9,8 +9,8 @@
 static Class   gWKDS      = Nil;   // WKWebsiteDataStore, resolved by name
 static NSUUID *gUUID      = nil;   // this container's stable store identifier
 static id      gStore     = nil;   // cached per-container store (lazy)
-static BOOL    gInstalled = NO;
-static BOOL    gBuilding  = NO;    // re-entrancy guard around store creation
+static BOOL    gInstalled = NO;    // full per-container isolation active
+static BOOL    gProbeOnly = NO;    // log-only observability shim (isolation off)
 
 static id (*orig_defaultDataStore)(id, SEL) = NULL;
 
@@ -39,19 +39,34 @@ static NSUUID *VSUUIDForCID(NSString *cid) {
 /// Builds (once) and returns this container's persistent store, or nil if WebKit
 /// cannot provide one — the caller then falls back to the real default store.
 static id VSContainerStore(void) {
+    // Fast path: already built and published.
+    @synchronized (VSWebKitLock()) { if (gStore) return gStore; }
+    if (!gWKDS || !gUUID) return nil;
+
+    // Same-thread re-entrancy guard: if +dataStoreForIdentifier: internally asks
+    // for +defaultDataStore again on THIS thread, hand back the real default for
+    // that nested call instead of recursing into another build.
+    static __thread BOOL building = NO;
+    if (building) return nil;
+
+    // Build OUTSIDE VSWebKitLock. +dataStoreForIdentifier: is Apple code whose
+    // internal threading we do not control; holding our lock across it risks an
+    // ABBA wedge with another thread that also wants the default store — the exact
+    // shape of a signup hang. Worst case two threads build concurrently and we keep
+    // whichever publishes first, discarding the other.
+    building = YES;
+    id built = nil;
+    @try {
+        typedef id (*Fn)(Class, SEL, NSUUID *);
+        built = ((Fn)objc_msgSend)(gWKDS, @selector(dataStoreForIdentifier:), gUUID);
+    } @catch (NSException *e) {
+        VSLogE(@"webkit", @"dataStoreForIdentifier: threw (%@) — using default store", e.reason);
+    }
+    building = NO;
+    if (!built) return nil;
+
     @synchronized (VSWebKitLock()) {
-        if (gStore || gBuilding) return gStore;
-        if (!gWKDS || !gUUID) return nil;
-        gBuilding = YES;
-        @try {
-            typedef id (*Fn)(Class, SEL, NSUUID *);
-            Fn fn = (Fn)objc_msgSend;
-            gStore = fn(gWKDS, @selector(dataStoreForIdentifier:), gUUID);
-        } @catch (NSException *e) {
-            VSLogE(@"webkit", @"dataStoreForIdentifier: threw (%@) — using default store", e.reason);
-            gStore = nil;
-        }
-        gBuilding = NO;
+        if (!gStore) gStore = built;   // first writer wins; extra builds discarded
         return gStore;
     }
 }
@@ -65,6 +80,21 @@ static id vs_defaultDataStore(id self_, SEL _cmd) {
     if (!gInstalled) return orig_defaultDataStore(self_, _cmd);
     id store = VSContainerStore();
     return store ?: orig_defaultDataStore(self_, _cmd);
+}
+
+#pragma mark - Log-only probe (isolation disabled)
+
+/// Used when isolation is off (the default while the signup path is stabilised).
+/// Swizzles the same +defaultDataStore, notes the first web-store request — which
+/// tells us whether a flow such as signup runs through a web view — then returns
+/// the genuine default store. No lock, no store build: it cannot wedge.
+static id vs_probeDefaultDataStore(id self_, SEL _cmd) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        VSLogW(@"webkit", @"Instagram requested +defaultDataStore — a web view is in use "
+                          @"(WebKit isolation is OFF; the shared default store is served)");
+    });
+    return orig_defaultDataStore ? orig_defaultDataStore(self_, _cmd) : nil;
 }
 
 #pragma mark - Install
@@ -107,6 +137,18 @@ static id vs_defaultDataStore(id self_, SEL _cmd) {
     VSLogI(@"webkit", @"isolated -> data store %@", gUUID.UUIDString);
     return YES;
 }
++ (void)installProbe {
+    if (gInstalled || gProbeOnly) return;   // never double-install over isolation
+    Class wkds = NSClassFromString(@"WKWebsiteDataStore");
+    if (!wkds) { VSLogI(@"webkit", @"probe: WKWebsiteDataStore absent — nothing to observe"); return; }
+    Method m = class_getClassMethod(wkds, @selector(defaultDataStore));
+    if (!m) { VSLogI(@"webkit", @"probe: +defaultDataStore not found"); return; }
+    orig_defaultDataStore = (id (*)(id, SEL))method_getImplementation(m);
+    method_setImplementation(m, (IMP)vs_probeDefaultDataStore);
+    gProbeOnly = YES;
+    VSLogI(@"webkit", @"probe installed — isolation OFF, first web-store access will be logged");
+}
+
 #pragma mark - Purge (container delete / reset)
 
 + (void)purgeStoreForContainerID:(NSString *)cid {

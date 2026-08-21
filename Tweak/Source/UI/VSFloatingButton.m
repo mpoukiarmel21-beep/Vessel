@@ -13,7 +13,8 @@ static NSString *const kFracKey = @"btnFrac";   // vertical position, 0..1
 @interface VSFloatingButton ()
 @property (nonatomic, strong) UIVisualEffectView *blur;
 @property (nonatomic, strong) CAShapeLayer *ring;
-@property (nonatomic, strong) UILabel *initialLabel;
+@property (nonatomic, strong) CAShapeLayer *cardBack;   // logo: rear card (outline)
+@property (nonatomic, strong) CAShapeLayer *cardFront;  // logo: front card (filled)
 @property (nonatomic, strong) UILabel *badgeLabel;
 @property (nonatomic, strong) UIView  *badge;
 @property (nonatomic, strong) VSStore *prefs;
@@ -42,14 +43,22 @@ static NSString *const kFracKey = @"btnFrac";   // vertical position, 0..1
 
         _ring = [CAShapeLayer layer];
         _ring.fillColor = UIColor.clearColor.CGColor;
-        _ring.lineWidth = 3.0;
+        _ring.lineWidth = 2.0;
         [self.layer addSublayer:_ring];
 
-        _initialLabel = [UILabel new];
-        _initialLabel.textAlignment = NSTextAlignmentCenter;
-        _initialLabel.font = [VSTheme fontTitle];
-        _initialLabel.textColor = [VSTheme primaryText];
-        [self addSubview:_initialLabel];
+        // Code-drawn "stacked cards" mark: two overlapping rounded squares that
+        // read as several identities layered together — Vessel's whole idea. No
+        // bundled asset, so it scales crisply and tints with the brand color.
+        _cardBack = [CAShapeLayer layer];
+        _cardBack.fillColor = UIColor.clearColor.CGColor;
+        _cardBack.lineWidth = 2.4;
+        _cardBack.lineJoin = kCALineJoinRound;
+        [self.layer addSublayer:_cardBack];
+
+        _cardFront = [CAShapeLayer layer];
+        _cardFront.lineWidth = 2.4;
+        _cardFront.lineJoin = kCALineJoinRound;
+        [self.layer addSublayer:_cardFront];
 
         _badge = [UIView new];
         _badge.backgroundColor = [VSTheme accent];
@@ -84,12 +93,22 @@ static NSString *const kFracKey = @"btnFrac";   // vertical position, 0..1
     self.layer.cornerRadius = s / 2.0;
     _blur.frame = self.bounds;
     _blur.layer.cornerRadius = s / 2.0;
-    _initialLabel.frame = self.bounds;
 
     // Ring inset by half its width so the stroke sits fully inside the circle.
     CGFloat inset = _ring.lineWidth / 2.0;
     _ring.path = [UIBezierPath bezierPathWithOvalInRect:
                   CGRectInset(self.bounds, inset, inset)].CGPath;
+
+    // Two rounded squares, offset diagonally: rear card up-right (outline), front
+    // card down-left (filled). Sized/placed off the button so it scales with it.
+    CGFloat card   = s * 0.40;
+    CGFloat corner = card * 0.30;
+    CGFloat g      = s * 0.115;               // diagonal offset between the cards
+    CGPoint ctr    = CGPointMake(s / 2.0, s / 2.0);
+    CGRect backR  = CGRectMake(ctr.x + g/2 - card/2, ctr.y - g/2 - card/2, card, card);
+    CGRect frontR = CGRectMake(ctr.x - g/2 - card/2, ctr.y + g/2 - card/2, card, card);
+    _cardBack.path  = [UIBezierPath bezierPathWithRoundedRect:backR  cornerRadius:corner].CGPath;
+    _cardFront.path = [UIBezierPath bezierPathWithRoundedRect:frontR cornerRadius:corner].CGPath;
 
     CGFloat b = 20.0;
     _badge.frame = CGRectMake(s - b, -2, b, b);
@@ -102,13 +121,14 @@ static NSString *const kFracKey = @"btnFrac";   // vertical position, 0..1
 #pragma mark - Content
 
 - (void)refresh {
-    VSContainer *active = VSManager.shared.active;
-    UIColor *color = [VSTheme colorForContainer:active];
-    _ring.strokeColor = color.CGColor;
+    // One brand color throughout — no per-container tint. The active container is
+    // conveyed by the panel, not by recolouring the button.
+    UIColor *color = [VSTheme accent];
+    _ring.strokeColor      = color.CGColor;
+    _cardBack.strokeColor  = color.CGColor;
+    _cardFront.fillColor   = color.CGColor;
+    _cardFront.strokeColor = color.CGColor;
     _badge.backgroundColor = color;
-
-    NSString *name = active.name.length ? active.name : @"?";
-    _initialLabel.text = [[name substringToIndex:1] uppercaseString];
 
     NSUInteger n = VSManager.shared.containers.count;
     _badgeLabel.text = n > 99 ? @"99+" : [NSString stringWithFormat:@"%lu", (unsigned long)n];

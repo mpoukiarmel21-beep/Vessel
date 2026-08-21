@@ -72,6 +72,14 @@ static const NSTimeInterval kCoalesce = 0.30;
     return v;
 }
 
+- (id)objectForKey:(NSString *)key found:(BOOL *)found {
+    if (key.length == 0) { if (found) *found = NO; return nil; }
+    __block id v; __block BOOL f;
+    dispatch_sync(_q, ^{ v = self->_mem[key]; f = (v != nil); });
+    if (found) *found = f;
+    return v;
+}
+
 - (BOOL)hasKey:(NSString *)key {
     if (key.length == 0) return NO;
     __block BOOL h;

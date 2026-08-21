@@ -10,6 +10,7 @@ NSString *const VSContainersDidChangeNotification = @"VSContainersDidChange";
 
 static NSString *const kActiveKey  = @"activeContainer";
 static NSString *const kPendingKey = @"pendingContainer";
+static NSString *const kResetKey   = @"resetPending";
 static NSString *const kListKey    = @"containers";
 static NSString *const kSchemaKey  = @"schema";
 static NSString *const kBootsKey   = @"bootCount";
@@ -57,6 +58,11 @@ static NSString *const kSchemaNow  = @"1";
     _bootCount = [[_state objectForKey:kBootsKey] integerValue] + 1;
     [_state setObject:@(_bootCount) forKey:kBootsKey];
 
+    // A reset armed by the UI is applied HERE — before loadList and before any
+    // hook or HOME redirect runs — because right now nothing on disk is live yet.
+    // This is the safe moment the in-session reset never had.
+    [self consumePendingResetIfNeeded];
+
     [self loadList];
     [self ensureDefaultContainer];
     [self repairMissingIdentities];
@@ -74,6 +80,34 @@ static NSString *const kSchemaNow  = @"1";
            (unsigned long)_containers.count);
 }
 
+
+- (void)consumePendingResetIfNeeded {
+    if (![[_state objectForKey:kResetKey] boolValue]) return;
+
+    VSLogW(@"manager", @"pending FULL RESET — wiping all container storage at boot");
+    NSFileManager *fm = NSFileManager.defaultManager;
+
+    // Both roots sit under vesselRoot, outside the diagnostics dir. Removing them
+    // clears every container tree and every private store (cookies/defaults) in
+    // one sweep. Nothing here is live yet: HOME has not been redirected.
+    for (NSString *root in @[ [VSPaths containersRoot], [VSPaths privateRoot] ]) {
+        NSError *fe = nil;
+        if (root.length && [fm fileExistsAtPath:root] &&
+            ![fm removeItemAtPath:root error:&fe])
+            VSLogE(@"manager", @"reset: %@: %@", root, fe.localizedDescription);
+    }
+
+    // Drop the list and the selection, and clear the flag so this runs exactly
+    // once. loadList/ensureDefaultContainer/resolveActive below rebuild a clean
+    // default, exactly as a first launch would.
+    [_list replaceAllValues:@{}];
+    [_state removeObjectForKey:kActiveKey];
+    [_state removeObjectForKey:kPendingKey];
+    [_state removeObjectForKey:kResetKey];
+    [_list flushNow];
+    [_state flushNow];
+    VSLogI(@"manager", @"reset consumed — starting from a clean slate");
+}
 
 - (void)loadList {
     [_containers removeAllObjects];
@@ -336,79 +370,17 @@ static NSError *VSErr(NSInteger code, NSString *msg) {
 
 #pragma mark - Reset
 
-- (BOOL)resetEverythingWithError:(NSError **)err {
-    VSLogW(@"manager", @"FULL RESET requested — wiping %lu container(s)",
-           (unsigned long)_containers.count);
-
-    NSFileManager *fm = NSFileManager.defaultManager;
-    NSError *first = nil;
-
-    // Remove every container tree we know about, then sweep the containers root
-    // for orphans a failed create could have left behind. Keep going after a
-    // failure: a partial wipe that reports the error beats stopping halfway and
-    // leaving the list pointing at trees that are already gone.
-    for (VSContainer *c in [_containers copy]) {
-        NSString *root = c.rootPath;
-        NSError *fe = nil;
-        if (root.length && [fm fileExistsAtPath:root] &&
-            ![fm removeItemAtPath:root error:&fe]) {
-            VSLogE(@"manager", @"reset: %@ (%@): %@", c.name, c.cid, fe.localizedDescription);
-            if (!first) first = fe;
-        }
-        // WebKit storage is out of process and keyed by container id, so it is not
-        // under any tree removed here — drop each one explicitly.
-        [VSHookWebKit purgeStoreForContainerID:c.cid];
-    }
-
-    NSString *croot = [VSPaths containersRoot];
-    for (NSString *entry in [fm contentsOfDirectoryAtPath:croot error:NULL] ?: @[]) {
-        NSString *p = [croot stringByAppendingPathComponent:entry];
-        NSError *fe = nil;
-        if (![fm removeItemAtPath:p error:&fe]) {
-            VSLogE(@"manager", @"reset: orphan %@: %@", entry, fe.localizedDescription);
-            if (!first) first = fe;
-        }
-    }
-
-    // Every container's private store lives under vesselRoot/private (outside the
-    // container trees, so untouched above); one removal clears them all — cookies,
-    // defaults, and any other aux store. VSStore recreates the parent for the fresh
-    // default on first write.
-    NSString *priv = [VSPaths privateRoot];
-    NSError *pe = nil;
-    if ([fm fileExistsAtPath:priv] && ![fm removeItemAtPath:priv error:&pe]) {
-        VSLogE(@"manager", @"reset: private root: %@", pe.localizedDescription);
-        if (!first) first = pe;
-    }
-
-    // The list and the active/pending selection go too. The diagnostics
-    // directory is deliberately untouched: it sits outside the containers and is
-    // the only thing that makes a post-mortem of this reset possible.
-    [_containers removeAllObjects];
-    [_list replaceAllValues:@{}];
-    [_list flushNow];
-    [_state removeObjectForKey:kActiveKey];
-    [_state removeObjectForKey:kPendingKey];
-    [_state flushNow];
-    _active = nil;
-
-    // Rebuild from scratch, exactly as a first launch would.
-    [self ensureDefaultContainer];
-    [self resolveActive];
-    if (![_active prepareStorage]) {
-        VSLogE(@"manager", @"reset: fresh default tree unusable");
-        if (!first) first = VSErr(6, @"Le dossier du nouveau container par défaut "
-                                     @"n'a pas pu être créé.");
-    }
-    [_state flushNow];
-    [_list flushNow];
-
-    VSLogI(@"manager", @"reset done — active=%@ (%@)", _active.name, _active.cid);
-    [NSNotificationCenter.defaultCenter postNotificationName:VSContainersDidChangeNotification
-                                                     object:nil];
-
-    if (first) { if (err) *err = first; return NO; }
-    return YES;
+/// See the header: this only records intent. The wipe itself runs at the top of
+/// the next -bootstrapBeforeHooks (consumePendingResetIfNeeded), where no tree is
+/// live. Deleting the active container's tree here — under a running Instagram
+/// whose HOME points into it — is what made the old in-session reset freeze the
+/// app on a half-dead session.
+- (BOOL)armFullReset {
+    [_state setObject:@YES forKey:kResetKey];
+    BOOL ok = [_state flushNow];
+    if (ok) VSLogW(@"manager", @"FULL RESET armed — everything is wiped on next launch");
+    else    VSLogE(@"manager", @"could not arm reset: state flush failed");
+    return ok;
 }
 
 @end

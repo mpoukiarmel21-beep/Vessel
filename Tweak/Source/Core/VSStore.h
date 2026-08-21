@@ -18,6 +18,13 @@
 @property (nonatomic, readonly, copy) NSString *label;
 
 - (id)objectForKey:(NSString *)key;
+
+/// Single queue-hop existence + value read: sets *found to whether the key is
+/// present, and returns its value (nil when absent). Collapses the hasKey +
+/// objectForKey pair that every isolated-defaults read otherwise makes into one
+/// dispatch_sync — halving the main-thread hops NSUserDefaults reads incur.
+- (id)objectForKey:(NSString *)key found:(BOOL *)found;
+
 - (void)setObject:(id)obj forKey:(NSString *)key;   // nil obj removes
 - (void)removeObjectForKey:(NSString *)key;
 - (NSDictionary *)allValues;

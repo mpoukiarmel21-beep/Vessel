@@ -32,8 +32,10 @@ static BOOL VSIsTomb(id v) {
 /// (a real value, or nil for a tombstone) and the caller must NOT consult the real
 /// defaults; NO means fall back so registration/global-domain keys still resolve.
 static BOOL VSStoreAnswer(NSString *key, id *out) {
-    if (!gInstalled || key.length == 0 || ![gStore hasKey:key]) return NO;
-    id v = [gStore objectForKey:key];
+    if (!gInstalled || key.length == 0) return NO;
+    BOOL found = NO;
+    id v = [gStore objectForKey:key found:&found];   // one queue hop, not two
+    if (!found) return NO;
     *out = VSIsTomb(v) ? nil : v;
     return YES;
 }

@@ -23,7 +23,7 @@
               @"#00C7BE", @"#FFD60A", @"#FF6482", @"#64D2FF", @"#BF5AF2" ];
 }
 
-+ (UIColor *)accent            { return [self colorFromHex:self.paletteHex.firstObject]; }
++ (UIColor *)accent            { return [self colorFromHex:@"#5E5CE6"]; } // indigo — one calm, professional brand color
 + (UIColor *)danger            { return UIColor.systemRedColor; }
 + (UIColor *)cardBackground    { return UIColor.secondarySystemBackgroundColor; }
 + (UIColor *)elevatedBackground{ return UIColor.tertiarySystemBackgroundColor; }
@@ -65,8 +65,12 @@
 }
 
 + (UIColor *)colorForContainer:(VSContainer *)container {
-    if (container.colorHex.length) return [self colorFromHex:container.colorHex];
-    return [self colorFromHex:[self defaultColorHexForID:container.cid ?: @""]];
+    // One brand color everywhere. Per-container rainbow hues were noisy and read
+    // as unprofessional; the active container is now shown by placement (the
+    // header, the checkmark) rather than by tint. Kept as a method so callers and
+    // the stored colorHex field stay source-compatible.
+    (void)container;
+    return [self accent];
 }
 
 #pragma mark - Fonts

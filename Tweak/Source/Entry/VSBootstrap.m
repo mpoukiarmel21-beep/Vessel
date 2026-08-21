@@ -38,6 +38,23 @@
 /// no-op rather than install anything.
 BOOL VSSafeModeActive = NO;
 
+// --- Phase-8 hardening hooks, temporarily disabled ---------------------------
+// These two were the leading suspects for the signup hang seen on build-17, and
+// neither is required for the core "one account per container" isolation:
+//   * WebKit isolation (layer 4b): swizzles +defaultDataStore and builds a
+//     per-container WKWebsiteDataStore via +dataStoreForIdentifier: — Apple code
+//     whose internal threading we don't control, and the signup flow may run
+//     through a web view. Disabled -> a log-only probe runs instead (below).
+//   * Image cloak (layer 7): hides our dylib from the loaded-image list, but only
+//     rebinds _dyld_image_count/name (not _header/_slide), so a paired name<->header
+//     image walk sees a mismatch: a detection tell AND a crash risk exactly when
+//     anti-automation is harshest (account creation).
+// Core isolation (FS / keychain / defaults / cookies / device / locale) is
+// unaffected and stays ON. Flip either constant to YES to re-enable after an
+// on-device test proves the flow it guards is stable.
+static const BOOL kEnableWebKitIsolation = NO;
+static const BOOL kEnableImageCloak      = NO;
+
 static void VSBootstrapMain(void) {
     // --- 1. real home, before anything can redirect it -------------------
     [VSPaths snapshotRealHome];
@@ -127,10 +144,17 @@ static void VSBootstrapMain(void) {
         // "furthest breadcrumb = guilty module" invariant must hold, so this logs
         // instead. Gated on HOME with the rest of the isolation block. A NO here is
         // non-fatal (pre-iOS 17 or WebKit absent): the app stays on the shared store.
-        BOOL web = home ? [VSHookWebKit installForContainerID:active.cid] : NO;
-        if (home)
+        // Layer 4b (WebKit): per-container web data store. Disabled by default
+        // (see kEnableWebKitIsolation) — when off, a log-only probe records whether
+        // the signup/login flow uses a web view, with zero lock/build hazard.
+        if (home && kEnableWebKitIsolation) {
+            BOOL web = [VSHookWebKit installForContainerID:active.cid];
             VSLogI(@"boot", @"layer 4b (WebKit): %@",
                    web ? @"isolated" : @"not isolated (shared default store)");
+        } else {
+            [VSHookWebKit installProbe];
+            VSLogI(@"boot", @"layer 4b (WebKit): DISABLED (probe only) — reliability-first for signup");
+        }
 
         // Layer 5 (identity): make the active container look like a different
         // iPhone. Gated on HOME like the isolation layers — if we are running
@@ -169,8 +193,17 @@ static void VSBootstrapMain(void) {
         // isolates no state, it only removes the "this process is modified" tell, so
         // it is worth doing even when we are otherwise running unmodified. No
         // breadcrumb (the VSBootStep enum is frozen); logs instead.
-        BOOL cloak = [VSHookImage install];
-        VSLogI(@"boot", @"image cloak: %@", cloak ? @"active" : @"inactive (image list genuine)");
+        if (kEnableImageCloak) {
+            BOOL cloak = [VSHookImage install];
+            VSLogI(@"boot", @"image cloak: %@", cloak ? @"active" : @"inactive (image list genuine)");
+        } else {
+            // Disabled by default (see kEnableImageCloak): the cloak rebinds
+            // _dyld_image_count/name but not _header/_slide, so a paired
+            // name<->header walk would see a mismatch — a detection tell and a
+            // crash risk during signup. Consistency beats stealth until the full
+            // quartet can be hooked safely.
+            VSLogI(@"boot", @"image cloak: DISABLED — image list left genuine (consistency > stealth)");
+        }
     } else {
         [log breadcrumb:VSBootStepHomeHooked note:@"skipped (safe mode)"];
     }
