@@ -25,7 +25,8 @@ VESSEL_PHASE1 = \
 	Source/Entry/VSBootstrap.m \
 	Source/Core/VSLog.m \
 	Source/Core/VSPaths.m \
-	Source/Core/VSStore.m
+	Source/Core/VSStore.m \
+	Source/Core/VSWatchdog.m
 
 # Phase 2 : identite par container + liste des containers.
 VESSEL_PHASE2 = \

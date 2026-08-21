@@ -4,6 +4,7 @@
 #import "../Core/VSStore.h"
 #import "../Core/VSPaths.h"
 #import "../Core/VSLog.h"
+#import "../Core/VSWatchdog.h"
 #import <objc/runtime.h>
 
 static VSStore                                   *gStore     = nil;  // this container's cookie jar on disk
@@ -198,19 +199,23 @@ static NSArray *vs_cookiesForURL(id self_, SEL _cmd, NSURL *url) {
 static void vs_setCookie(id self_, SEL _cmd, NSHTTPCookie *cookie) {
     if (!gInstalled || self_ != gShared) { orig_setCookie(self_, _cmd, cookie); return; }
     if (![cookie isKindOfClass:NSHTTPCookie.class]) return;
+    VSMark("cookie:set");
     @synchronized (VSJarLock()) { VSAddCookieLocked(cookie); VSPersistLocked(); }
     VSPostChanged();
+    VSMark("cookie:set.done");
 }
 
 static void vs_setCookies(id self_, SEL _cmd, NSArray *cookies, NSURL *url, NSURL *mainDoc) {
     if (!gInstalled || self_ != gShared) { orig_setCookies(self_, _cmd, cookies, url, mainDoc); return; }
     if (![cookies isKindOfClass:NSArray.class]) return;
+    VSMark("cookie:setMany");
     @synchronized (VSJarLock()) {
         for (NSHTTPCookie *c in cookies)
             if ([c isKindOfClass:NSHTTPCookie.class]) VSAddCookieLocked(c);
         VSPersistLocked();
     }
     VSPostChanged();
+    VSMark("cookie:setMany.done");
 }
 
 static void vs_deleteCookie(id self_, SEL _cmd, NSHTTPCookie *cookie) {

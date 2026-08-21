@@ -2,6 +2,7 @@
 
 #import "VSHookKeychain.h"
 #import "../Core/VSLog.h"
+#import "../Core/VSWatchdog.h"
 #import "../vendor/fishhook/fishhook.h"
 #import <Security/Security.h>
 #import <dlfcn.h>
@@ -233,7 +234,9 @@ static OSStatus vs_SecItemAdd(CFDictionaryRef attributes, CFTypeRef *result) {
         // item has an empty primary key and Instagram never stores its session
         // that way, so the realistic paths are always namespaced.
         NSDictionary *scoped = VSApply((__bridge NSDictionary *)attributes, NULL);
+        VSMark("keychain:add");
         OSStatus st = orig_SecItemAdd((__bridge CFDictionaryRef)scoped, result);
+        VSMark("keychain:add.done");
         if (st == errSecSuccess) VSStripInPlace(result);   // caller never sees the tag
         return st;
     }
@@ -245,11 +248,16 @@ static OSStatus vs_SecItemCopyMatching(CFDictionaryRef query, CFTypeRef *result)
         BOOL found = NO;
         NSDictionary *q = VSApply((__bridge NSDictionary *)query, &found);
         if (found) {
+            VSMark("keychain:copy");
             OSStatus st = orig_SecItemCopyMatching((__bridge CFDictionaryRef)q, result);
+            VSMark("keychain:copy.done");
             if (st == errSecSuccess) VSStripInPlace(result);
             return st;
         }
-        return VSBroadCopy((__bridge NSDictionary *)query, result);
+        VSMark("keychain:broad-copy");   // N+1 securityd round-trips — prime hang suspect
+        OSStatus st = VSBroadCopy((__bridge NSDictionary *)query, result);
+        VSMark("keychain:broad-copy.done");
+        return st;
     }
 }
 
@@ -262,7 +270,10 @@ static OSStatus vs_SecItemUpdate(CFDictionaryRef query, CFDictionaryRef attribut
         // so the update dict is prefixed too.
         NSDictionary *upd = VSApply((__bridge NSDictionary *)attributesToUpdate, NULL);
         if (found) return orig_SecItemUpdate((__bridge CFDictionaryRef)q, (__bridge CFDictionaryRef)upd);
-        return VSBroadUpdate((__bridge NSDictionary *)query, upd);
+        VSMark("keychain:broad-update");
+        OSStatus st = VSBroadUpdate((__bridge NSDictionary *)query, upd);
+        VSMark("keychain:broad-update.done");
+        return st;
     }
 }
 
@@ -272,7 +283,10 @@ static OSStatus vs_SecItemDelete(CFDictionaryRef query) {
         BOOL found = NO;
         NSDictionary *q = VSApply((__bridge NSDictionary *)query, &found);
         if (found) return orig_SecItemDelete((__bridge CFDictionaryRef)q);
-        return VSBroadDelete((__bridge NSDictionary *)query);
+        VSMark("keychain:broad-delete");
+        OSStatus st = VSBroadDelete((__bridge NSDictionary *)query);
+        VSMark("keychain:broad-delete.done");
+        return st;
     }
 }
 

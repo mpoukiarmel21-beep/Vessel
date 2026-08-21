@@ -2,13 +2,15 @@
 
 #import "VSStore.h"
 #import "VSLog.h"
+#import "VSWatchdog.h"
 #import <UIKit/UIKit.h>
 
 static const NSTimeInterval kCoalesce = 0.30;
 
 @interface VSStore () {
     NSMutableDictionary *_mem;
-    dispatch_queue_t _q;          // serialises memory + disk
+    dispatch_queue_t _q;          // serialises memory (fast, in-process)
+    dispatch_queue_t _io;         // serialises disk writes (slow) — OFF the read path
     BOOL _dirty;
     BOOL _flushScheduled;
     BOOL _lifecycleAttached;
@@ -21,7 +23,8 @@ static const NSTimeInterval kCoalesce = 0.30;
     if ((self = [super init])) {
         _path = [path copy];
         _label = [label copy] ?: @"store";
-        _q = dispatch_queue_create("vessel.store", DISPATCH_QUEUE_SERIAL);
+        _q  = dispatch_queue_create("vessel.store", DISPATCH_QUEUE_SERIAL);
+        _io = dispatch_queue_create("vessel.store.io", DISPATCH_QUEUE_SERIAL);
         _mem = [NSMutableDictionary dictionary];
         [self loadFromDisk];
     }
@@ -129,36 +132,70 @@ static const NSTimeInterval kCoalesce = 0.30;
     });
 }
 
+/// Must be called on _q. Serialises the in-memory dictionary (fast, CPU-only) then
+/// hands the actual file work to _io, so a read on _q is never blocked behind a
+/// disk write or the .bak copy — the churn that, under a signup write storm, wedged
+/// the main thread while it waited on a NSUserDefaults read. Durability is unchanged:
+/// the bytes are captured here, the write just happens a hair later on another queue.
+- (void)writeLocked {
+    if (!_dirty) return;
+    NSData *data = [self serializeLocked];
+    if (!data) return;                       // serialise failure already logged; stay dirty
+    _dirty = NO;
+    NSString *path = _path, *bak = self.backupPath;
+    dispatch_async(_io, ^{
+        if (![self writeData:data toPath:path backup:bak])
+            dispatch_async(self->_q, ^{ self->_dirty = YES; });   // re-arm; a later change retries
+    });
+}
+
 /// Must be called on _q.
-/// NSDataWritingAtomic writes to a sibling temp file and atomically exchanges it
-/// with the target, so a crash mid-write can never leave a truncated primary.
-/// The previous primary is copied to .bak first, giving one generation of
-/// rollback if the new contents themselves turn out to be bad.
-- (BOOL)writeLocked {
-    if (!_dirty) return YES;
+- (NSData *)serializeLocked {
     NSError *e = nil;
     NSData *data = [NSPropertyListSerialization dataWithPropertyList:_mem
                         format:NSPropertyListBinaryFormat_v1_0 options:0 error:&e];
-    if (!data) {
-        VSLogE(@"store", @"%@: serialise failed: %@", _label, e.localizedDescription);
-        return NO;
-    }
+    if (!data) VSLogE(@"store", @"%@: serialise failed: %@", _label, e.localizedDescription);
+    return data;
+}
+
+/// Runs on _io. NSDataWritingAtomic writes to a sibling temp file and atomically
+/// exchanges it with the target, so a crash mid-write can never leave a truncated
+/// primary. The previous primary is copied to .bak first, giving one generation of
+/// rollback if the new contents themselves turn out to be bad.
+- (BOOL)writeData:(NSData *)data toPath:(NSString *)path backup:(NSString *)bak {
     NSFileManager *fm = NSFileManager.defaultManager;
-    if ([fm fileExistsAtPath:_path]) {
-        [fm removeItemAtPath:[self backupPath] error:nil];
-        [fm copyItemAtPath:_path toPath:[self backupPath] error:nil];
+    if ([fm fileExistsAtPath:path]) {
+        [fm removeItemAtPath:bak error:nil];
+        [fm copyItemAtPath:path toPath:bak error:nil];
     }
-    if (![data writeToFile:_path options:NSDataWritingAtomic error:&e]) {
+    NSError *e = nil;
+    if (![data writeToFile:path options:NSDataWritingAtomic error:&e]) {
         VSLogE(@"store", @"%@: atomic write failed: %@", _label, e.localizedDescription);
         return NO;
     }
-    _dirty = NO;
     return YES;
 }
 
+- (void)flushAsync {
+    dispatch_async(_q, ^{ [self writeLocked]; });
+}
+
 - (BOOL)flushNow {
-    __block BOOL ok;
-    dispatch_sync(_q, ^{ ok = [self writeLocked]; });
+    VSMark("store:flushNow");
+    __block NSData *data = nil;
+    dispatch_sync(_q, ^{
+        if (!self->_dirty) return;
+        data = [self serializeLocked];
+        if (data) self->_dirty = NO;
+    });
+    if (!data) {                             // already clean — just drain any in-flight write
+        dispatch_sync(_io, ^{});
+        return YES;
+    }
+    __block BOOL ok = NO;
+    NSString *path = _path, *bak = self.backupPath;
+    dispatch_sync(_io, ^{ ok = [self writeData:data toPath:path backup:bak]; });
+    if (!ok) dispatch_async(_q, ^{ self->_dirty = YES; });
     return ok;
 }
 
@@ -166,6 +203,8 @@ static const NSTimeInterval kCoalesce = 0.30;
     dispatch_sync(_q, ^{
         [self->_mem removeAllObjects];
         self->_dirty = NO;
+    });
+    dispatch_sync(_io, ^{                    // ordered after any writes already queued
         NSFileManager *fm = NSFileManager.defaultManager;
         [fm removeItemAtPath:self->_path error:nil];
         [fm removeItemAtPath:[self backupPath] error:nil];

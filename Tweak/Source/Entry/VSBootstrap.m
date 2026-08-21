@@ -19,6 +19,7 @@
 
 #import <UIKit/UIKit.h>
 #import "Core/VSLog.h"
+#import "Core/VSWatchdog.h"
 #import "Core/VSPaths.h"
 #import "Core/VSIdentity.h"
 #import "Core/VSManager.h"
@@ -63,6 +64,11 @@ static void VSBootstrapMain(void) {
     VSLog *log = VSLog.shared;
     [log bootstrapWithRealDataRoot:[VSPaths vesselRoot]];
     [log installCrashHandlers];
+    // Arm the main-thread stall detector as soon as logging exists, so it covers
+    // the whole boot and every hooked call path. It never blocks the main thread —
+    // it only times how stale the main queue's last answer is and names the last
+    // VSMark breadcrumb when a stall crosses the threshold.
+    [VSWatchdog start];
     [log breadcrumb:VSBootStepConstructor note:@"constructor entered"];
     [log drainPreviousCrashReport];
     [log breadcrumb:VSBootStepPathsResolved

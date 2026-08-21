@@ -4,6 +4,7 @@
 #import "../Core/VSStore.h"
 #import "../Core/VSPaths.h"
 #import "../Core/VSLog.h"
+#import "../Core/VSWatchdog.h"
 #import "../vendor/fishhook/fishhook.h"
 #import <objc/runtime.h>
 #import <CoreFoundation/CoreFoundation.h>
@@ -169,7 +170,12 @@ static void vs_removeObjectForKey(id s, SEL c, NSString *key) {
     VSStorePut(key, nil);   // tombstone
 }
 static BOOL vs_synchronize(id s, SEL c) {
-    if (gInstalled) [gStore flushNow];
+    // -synchronize is a legacy no-op in modern iOS, but apps still call it often on
+    // the main thread. Forcing a synchronous disk flush here (as before) turned each
+    // call into a full-plist write on the main thread — a signup write storm then
+    // reads as an endless spinner. Persist without blocking: the coalesced timer and
+    // the lifecycle flush still guarantee durability.
+    if (gInstalled) [gStore flushAsync];
     return orig_synchronize(s, c);
 }
 
@@ -179,12 +185,14 @@ static BOOL vs_synchronize(id s, SEL c) {
 static NSDictionary *vs_dictRep(id s, SEL c) {
     NSDictionary *base = orig_dictRep(s, c) ?: @{};
     if (!gInstalled) return base;
+    VSMark("defaults:dictRep");
     NSMutableDictionary *m = [base mutableCopy];
     NSDictionary *ours = [gStore allValues];
     for (NSString *k in ours) {
         id v = ours[k];
         if (VSIsTomb(v)) [m removeObjectForKey:k]; else m[k] = v;
     }
+    VSMark("defaults:dictRep.done");
     return m;
 }
 
@@ -256,11 +264,11 @@ static CFArrayRef vs_CFPrefCopyKeyList(CFStringRef appID, CFStringRef user, CFSt
     return orig_CFPrefCopyKeyList(appID, user, host);
 }
 static Boolean vs_CFPrefAppSync(CFStringRef appID) {
-    if (gInstalled && VSIsOurApp(appID)) [gStore flushNow];
+    if (gInstalled && VSIsOurApp(appID)) [gStore flushAsync];   // non-blocking, see vs_synchronize
     return orig_CFPrefAppSync(appID);
 }
 static Boolean vs_CFPrefSync(CFStringRef appID, CFStringRef user, CFStringRef host) {
-    if (gInstalled && VSIsOurApp(appID)) [gStore flushNow];
+    if (gInstalled && VSIsOurApp(appID)) [gStore flushAsync];   // non-blocking, see vs_synchronize
     return orig_CFPrefSync(appID, user, host);
 }
 

@@ -33,7 +33,15 @@
 - (NSUInteger)count;
 
 /// Blocks until the current contents are on disk. Safe to call from any thread.
+/// Reserved for lifecycle/terminate and the self-test — NOT the hot path.
 - (BOOL)flushNow;
+
+/// Persists soon, without blocking the caller: serialises on the memory queue and
+/// hands the disk write to a background I/O queue. This is what -synchronize maps
+/// to, so an app that calls it on the main thread every few writes never stalls
+/// there — durability across a kill is still guaranteed by the 300 ms coalesced
+/// flush and -attachLifecycleFlush.
+- (void)flushAsync;
 
 /// Deletes the store and its backup from disk and clears memory.
 - (void)destroy;
