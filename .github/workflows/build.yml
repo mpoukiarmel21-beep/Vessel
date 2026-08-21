@@ -1,0 +1,195 @@
+name: Build Vessel
+
+on:
+  push:
+    branches: [ "**" ]
+    paths:
+      - 'Tweak/**'
+      - '.github/workflows/build.yml'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'dylib = compile only (fast). ipa = also inject into the base IPA.'
+        required: true
+        default: 'dylib'
+        type: choice
+        options: [ dylib, ipa ]
+      base_ipa_tag:
+        description: 'Release tag holding the base Instagram IPA (ipa mode only)'
+        required: false
+        default: 'base-ipa'
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache Theos
+        id: theos-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/theos
+          key: theos-sdks-v1
+
+      - name: Setup Theos
+        run: |
+          set -euo pipefail
+          export THEOS=~/theos
+          if [ ! -d "$THEOS/makefiles" ]; then
+            git clone --quiet --recursive https://github.com/theos/theos.git "$THEOS"
+          fi
+          if [ ! -d "$THEOS/sdks/iPhoneOS16.5.sdk" ] && [ -z "$(ls -A "$THEOS/sdks" 2>/dev/null)" ]; then
+            curl -sSLO https://github.com/theos/sdks/archive/master.tar.gz
+            mkdir -p "$THEOS/sdks"
+            tar -xzf master.tar.gz -C "$THEOS/sdks/" --strip-components=1
+            rm -f master.tar.gz
+          fi
+          echo "THEOS=$THEOS" >> $GITHUB_ENV
+          echo "$THEOS/bin" >> $GITHUB_PATH
+          ls "$THEOS/sdks" | head
+
+      - name: Compile dylib
+        run: |
+          set -euo pipefail
+          export THEOS=~/theos
+          cd Tweak
+          make clean
+          make -j"$(sysctl -n hw.ncpu)" 2>&1 | tee /tmp/build.log
+          echo "::group::built artefacts"
+          find .theos/obj -name '*.dylib' -type f
+          echo "::endgroup::"
+
+      - name: Verify dylib (hard gates)
+        run: |
+          set -euo pipefail
+          DYLIB=$(find Tweak/.theos/obj -name 'Vessel.dylib' -type f ! -path '*dSYM*' | head -1)
+          if [ -z "$DYLIB" ]; then echo "::error::no Vessel.dylib produced"; exit 1; fi
+          echo "dylib: $DYLIB ($(du -h "$DYLIB" | cut -f1))"
+
+          echo "::group::otool -L"
+          otool -L "$DYLIB"
+          echo "::endgroup::"
+
+          # GATE 1 — CydiaSubstrate/ElleKit would make dyld fail to load the dylib
+          # on a non-jailbroken device: the whole tweak would silently die.
+          if otool -L "$DYLIB" | grep -qiE 'substrate|ellekit|libhooker'; then
+            echo "::error::dylib links a substrate-class library — dead on sideload"; exit 1
+          fi
+
+          # GATE 2 — must be arm64 (the Instagram binary is thin arm64).
+          if ! lipo -info "$DYLIB" | grep -q 'arm64'; then
+            echo "::error::dylib is not arm64"; exit 1
+          fi
+
+          # GATE 3 — no reference to a jailbreak-only path.
+          if otool -L "$DYLIB" | grep -qE '/Library/(Frameworks|MobileSubstrate)'; then
+            echo "::error::dylib references a jailbreak-only path"; exit 1
+          fi
+          echo "OK: substrate-free arm64 dylib, no jailbreak paths"
+
+      - name: Upload dylib artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vessel-dylib
+          path: Tweak/.theos/obj/**/Vessel.dylib
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Publish dylib to rolling release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          DYLIB=$(find Tweak/.theos/obj -name 'Vessel.dylib' -type f ! -path '*dSYM*' | head -1)
+          cp "$DYLIB" /tmp/Vessel.dylib
+          gh release create dylib-latest --title "Vessel dylib (rolling)" \
+            --notes "Latest compiled dylib. Inject with Sideloadly's \"Inject dylibs/frameworks\" option." \
+            --repo "${{ github.repository }}" 2>/dev/null || true
+          gh release upload dylib-latest /tmp/Vessel.dylib --repo "${{ github.repository }}" --clobber
+          echo "dylib: https://github.com/${{ github.repository }}/releases/download/dylib-latest/Vessel.dylib"
+
+      # ---------------------------------------------------------------------
+      # Full IPA path. Only on demand: it moves ~300 MB and takes several
+      # minutes, whereas the dylib gates above catch every compile-time problem.
+      # ---------------------------------------------------------------------
+      - name: Build insert_dylib
+        if: inputs.mode == 'ipa'
+        run: |
+          set -euo pipefail
+          git clone --quiet https://github.com/tyilo/insert_dylib.git /tmp/insert_dylib
+          cd /tmp/insert_dylib
+          xcodebuild -quiet 2>/dev/null || xcodebuild
+          sudo cp build/Release/insert_dylib /usr/local/bin/
+          insert_dylib --help 2>&1 | head -3 || true
+
+      - name: Download base IPA
+        if: inputs.mode == 'ipa'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.base_ipa_tag }}"
+          gh release download "$TAG" --pattern '*.ipa' --repo "${{ github.repository }}" -D /tmp/base
+          BASE=$(ls /tmp/base/*.ipa | head -1)
+          echo "BASE_IPA=$BASE" >> $GITHUB_ENV
+          ls -lh "$BASE"
+
+      - name: Inject and repackage
+        if: inputs.mode == 'ipa'
+        run: |
+          set -euo pipefail
+          DYLIB=$(find "$GITHUB_WORKSPACE/Tweak/.theos/obj" -name 'Vessel.dylib' -type f ! -path '*dSYM*' | head -1)
+          WORK=$(mktemp -d); cd "$WORK"
+
+          echo "[1/6] extracting"
+          unzip -q "$BASE_IPA"
+          APP=$(ls -d Payload/*.app | head -1)
+          BIN="$APP/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")"
+          echo "app=$APP bin=$BIN"
+
+          echo "[2/6] staging dylib"
+          mkdir -p "$APP/Frameworks"
+          cp "$DYLIB" "$APP/Frameworks/Vessel.dylib"
+
+          echo "[3/6] injecting load command"
+          insert_dylib --strip-codesig --inplace \
+            "@executable_path/Frameworks/Vessel.dylib" "$BIN"
+
+          echo "[4/6] verifying the load command landed"
+          if ! otool -L "$BIN" | grep -q 'Frameworks/Vessel.dylib'; then
+            echo "::error::LC_LOAD_DYLIB for Vessel.dylib is absent after injection"; exit 1
+          fi
+          otool -L "$BIN" | grep -i vessel
+
+          echo "[5/6] ad-hoc signing"
+          for f in "$APP/Frameworks/"*.dylib; do codesign --force --sign - "$f"; done
+          codesign --force --sign - "$BIN"
+
+          echo "[6/6] packaging"
+          zip -r -q -X "$GITHUB_WORKSPACE/Vessel.ipa" Payload/
+          ls -lh "$GITHUB_WORKSPACE/Vessel.ipa"
+
+      - name: Publish IPA
+        if: inputs.mode == 'ipa'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="build-${{ github.run_number }}"
+          gh release create "$TAG" --repo "${{ github.repository }}" \
+            --title "Vessel build ${{ github.run_number }}" \
+            --notes "Instagram + Vessel. Install with Sideloadly." 2>/dev/null || true
+          gh release upload "$TAG" Vessel.ipa --repo "${{ github.repository }}" --clobber
+          URL="https://github.com/${{ github.repository }}/releases/download/$TAG/Vessel.ipa"
+          echo "IPA_URL=$URL" >> $GITHUB_ENV
+          echo "### IPA prête" >> $GITHUB_STEP_SUMMARY
+          echo "$URL" >> $GITHUB_STEP_SUMMARY
+          echo "=============================="
+          echo "$URL"
+          echo "=============================="

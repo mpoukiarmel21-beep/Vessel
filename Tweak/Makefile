@@ -1,0 +1,42 @@
+# Makefile — Vessel
+#
+# LIBRARY_NAME, PAS TweakName. Une cible tweak.mk lie automatiquement
+# /Library/Frameworks/CydiaSubstrate.framework, qui n'existe pas sur un appareil
+# non jailbreake : dyld echoue a charger la dylib et le tweak entier meurt en
+# silence. Le variable <NAME>_USE_SUBSTRATE = 0 ne suffit PAS (verifie en CI sur
+# le projet precedent). library.mk produit une dylib pure.
+#
+# Aucun %hook / MSHook* dans les sources : tous les hooks sont faits a la main
+# (method_setImplementation pour ObjC, fishhook/rebind_symbols pour le C).
+
+ARCHS = arm64
+TARGET = iphone:clang:latest:16.3
+
+include $(THEOS)/makefiles/common.mk
+
+LIBRARY_NAME = Vessel
+
+# La liste grandit phase par phase (cf. ARCHITECTURE.md §10). Chaque phase est
+# compilee en CI avant que la suivante ne soit ecrite : un fichier absent de
+# cette liste n'est pas encore ecrit, ce n'est pas un oubli.
+
+VESSEL_PHASE1 = \
+	Source/vendor/fishhook/fishhook.c \
+	Source/Entry/VSBootstrap.m \
+	Source/Core/VSLog.m \
+	Source/Core/VSPaths.m \
+	Source/Core/VSStore.m
+
+Vessel_FILES = $(VESSEL_PHASE1)
+
+Vessel_CFLAGS = -fobjc-arc \
+	-I$(THEOS_PROJECT_DIR)/Source \
+	-Wno-deprecated-declarations \
+	-Wno-unused-variable \
+	-Wno-error=unguarded-availability-new
+
+Vessel_FRAMEWORKS = UIKit CoreLocation MapKit Security SystemConfiguration AdSupport AppTrackingTransparency
+Vessel_PRIVATE_FRAMEWORKS =
+Vessel_LDFLAGS = -Wl,-no_warn_duplicate_libraries
+
+include $(THEOS_MAKE_PATH)/library.mk

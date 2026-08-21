@@ -1,0 +1,16 @@
+.theos/
+obj/
+packages/
+*.deb
+*.ipa
+*.dylib
+*.dSYM/
+*.o
+*.log
+dist/
+build/
+Input.ipa
+*.zip
+.DS_Store
+Thumbs.db
+_ipaprobe/
