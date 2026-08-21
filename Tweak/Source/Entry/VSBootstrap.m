@@ -25,6 +25,8 @@
 #import "Core/VSSelfTest.h"
 #import "Hooks/VSHookHome.h"
 #import "Hooks/VSHookKeychain.h"
+#import "Hooks/VSHookDefaults.h"
+#import "Hooks/VSHookCookies.h"
 
 /// Set when the crash streak trips the breaker. Modules must consult this and
 /// no-op rather than install anything.
@@ -94,6 +96,24 @@ static void VSBootstrapMain(void) {
                               : (home ? @"keychain install refused" : @"skipped (HOME refused)"))];
         if (home && !keys)
             VSLogE(@"boot", @"layer 2 (keychain) did not install — sessions may leak between containers");
+
+        // Layer 3: cfprefsd is out-of-process, so HOME redirect isolates none of
+        // Instagram's per-account preferences (saved logins, current-user hint).
+        BOOL defs = home ? [VSHookDefaults installForContainerID:active.cid] : NO;
+        [log breadcrumb:VSBootStepDefaultsHooked
+                   note:(defs ? @"defaults isolated"
+                              : (home ? @"defaults install refused" : @"skipped (HOME refused)"))];
+        if (home && !defs)
+            VSLogE(@"boot", @"layer 3 (defaults) did not install — per-account prefs may leak between containers");
+
+        // Layer 4: the shared cookie jar is likewise process-wide; without this a
+        // web-view sessionid written by one container is visible to the next.
+        BOOL cook = home ? [VSHookCookies installForContainerID:active.cid] : NO;
+        [log breadcrumb:VSBootStepCookiesHooked
+                   note:(cook ? @"cookies isolated"
+                              : (home ? @"cookies install refused" : @"skipped (HOME refused)"))];
+        if (home && !cook)
+            VSLogE(@"boot", @"layer 4 (cookies) did not install — web sessions may leak between containers");
     } else {
         [log breadcrumb:VSBootStepHomeHooked note:@"skipped (safe mode)"];
     }

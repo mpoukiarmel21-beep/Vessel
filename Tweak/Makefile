@@ -40,7 +40,14 @@ VESSEL_PHASE3 = \
 	Source/Hooks/VSHookHome.m \
 	Source/Hooks/VSHookKeychain.m
 
-Vessel_FILES = $(VESSEL_PHASE1) $(VESSEL_PHASE2) $(VESSEL_PHASE3)
+# Phase 4 : isolation couche 3 (NSUserDefaults/CFPreferences) + couche 4 (cookies
+# NSHTTPCookieStorage). cfprefsd et le pot de cookies partage sont hors-processus
+# comme le keychain : rediriger HOME ne les separe pas, d'ou ces deux couches.
+VESSEL_PHASE4 = \
+	Source/Hooks/VSHookDefaults.m \
+	Source/Hooks/VSHookCookies.m
+
+Vessel_FILES = $(VESSEL_PHASE1) $(VESSEL_PHASE2) $(VESSEL_PHASE3) $(VESSEL_PHASE4)
 
 Vessel_CFLAGS = -fobjc-arc \
 	-I$(THEOS_PROJECT_DIR)/Source \

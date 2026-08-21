@@ -9,6 +9,8 @@
 #import "VSLog.h"
 #import "../Hooks/VSHookHome.h"
 #import "../Hooks/VSHookKeychain.h"
+#import "../Hooks/VSHookDefaults.h"
+#import "../Hooks/VSHookCookies.h"
 #import <UIKit/UIKit.h>
 #import <math.h>
 
@@ -242,11 +244,14 @@ static void VSTestContainers(void) {
 /// our own bookkeeping: layer 1 writes through the redirected Documents path and
 /// looks for the bytes at the container path computed independently; layer 2
 /// stores a keychain item through the public API and proves securityd holds it
-/// only under the namespaced service. In safe mode the hooks are deliberately
-/// absent, so "not installed" is the expected state and is a note, not a failure.
+/// only under the namespaced service. Layers 3 (defaults) and 4 (cookies) do the
+/// same: each writes through the public API and proves the value physically landed
+/// in this container's private store on disk, not in the process-wide plist or
+/// cookie jar. In safe mode the hooks are deliberately absent, so "not installed"
+/// is the expected state and is a note, not a failure.
 static void VSTestIsolation(void) {
     if (VSSafeModeActive) {
-        VSNote(@"isolation: hooks disabled (safe mode) — layer 1/2 checks skipped");
+        VSNote(@"isolation: hooks disabled (safe mode) — layer 1-4 checks skipped");
         return;
     }
     NSString *l1 = [VSHookHome firstLeak];
@@ -254,6 +259,12 @@ static void VSTestIsolation(void) {
 
     NSString *l2 = [VSHookKeychain firstLeak];
     VSCheck(l2 == nil, @"isolation/layer2-keychain", l2);
+
+    NSString *l3 = [VSHookDefaults firstLeak];
+    VSCheck(l3 == nil, @"isolation/layer3-defaults", l3);
+
+    NSString *l4 = [VSHookCookies firstLeak];
+    VSCheck(l4 == nil, @"isolation/layer4-cookies", l4);
 }
 
 #pragma mark - Report
