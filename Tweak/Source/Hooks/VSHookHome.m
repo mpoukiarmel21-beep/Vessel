@@ -11,6 +11,7 @@
 static NSString *gRoot = nil;      // container root, standardised
 static NSString *gReal = nil;      // real home, standardised
 static NSString *gVessel = nil;    // <real home>/Library/Application Support/Vessel
+static NSString *gPrivate = nil;   // this container's private store dir, OUTSIDE the root
 static NSString *gRootC = nil, *gRealC = nil, *gVesselC = nil;   // canonical forms
 static BOOL gInstalled = NO;
 
@@ -105,8 +106,13 @@ static NSURL *vs_containerURL(id self_, SEL sel, NSString *group) {
     NSURL *real = orig_containerURL(self_, sel, group);
     if (!real || gRoot.length == 0 || group.length == 0) return real;
     NSString *safe = [group stringByReplacingOccurrencesOfString:@"/" withString:@"_"];
-    NSString *p = [[gRoot stringByAppendingPathComponent:@"_vessel/appgroups"]
-                   stringByAppendingPathComponent:safe];
+    // Land the group container in this container's private store (outside the root,
+    // invisible to the redirected HOME) so no foreign "appgroups" folder ever shows
+    // up in Instagram's home. gPrivate is always set when gRoot is; the gRoot-based
+    // branch is a defensive fallback that keeps a neutral, non-branded name.
+    NSString *base = gPrivate.length ? [gPrivate stringByAppendingPathComponent:@"appgroups"]
+                                     : [gRoot stringByAppendingPathComponent:@"tmp/appgroups"];
+    NSString *p = [base stringByAppendingPathComponent:safe];
     [NSFileManager.defaultManager createDirectoryAtPath:p withIntermediateDirectories:YES
                                             attributes:nil error:NULL];
     return [NSURL fileURLWithPath:p isDirectory:YES];
@@ -145,7 +151,7 @@ static BOOL VSSwizzle(Class cls, SEL sel, void *repl, void **outOrig) {
     // A home that half-works is worse than the real one: Instagram would create
     // a fresh account state in a directory it then cannot write to.
     NSFileManager *fm = NSFileManager.defaultManager;
-    NSString *probe = [r stringByAppendingPathComponent:@"_vessel/.homeprobe"];
+    NSString *probe = [r stringByAppendingPathComponent:@"tmp/.probe"];
     [fm createDirectoryAtPath:probe.stringByDeletingLastPathComponent
   withIntermediateDirectories:YES attributes:nil error:NULL];
     if (![@"ok" writeToFile:probe atomically:YES encoding:NSUTF8StringEncoding error:NULL]) {
@@ -157,6 +163,10 @@ static BOOL VSSwizzle(Class cls, SEL sel, void *repl, void **outOrig) {
     gRoot   = [r copy];
     gReal   = [real copy];
     gVessel = [[VSPaths vesselRoot].stringByStandardizingPath copy];
+    // r == containersRoot/<cid>, so its last component is the container id. The
+    // private store lives outside the root (under vesselRoot/private/<cid>), which
+    // VSMapPath excludes from redirection — see vs_containerURL.
+    gPrivate = [[VSPaths privateDirForContainerID:r.lastPathComponent].stringByStandardizingPath copy];
     gRootC   = [VSCanon(gRoot) copy];
     gRealC   = [VSCanon(gReal) copy];
     gVesselC = [VSCanon(gVessel) copy];
@@ -180,7 +190,7 @@ static BOOL VSSwizzle(Class cls, SEL sel, void *repl, void **outOrig) {
     if (!orig_NSHomeDirectory || !orig_NSTemporaryDirectory || !orig_NSSearchPath) {
         VSLogE(@"home", @"refusing to install: dlsym miss (home=%p tmp=%p search=%p)",
                orig_NSHomeDirectory, orig_NSTemporaryDirectory, orig_NSSearchPath);
-        gRoot = gReal = gVessel = gRootC = gRealC = gVesselC = nil;
+        gRoot = gReal = gVessel = gPrivate = gRootC = gRealC = gVesselC = nil;
         return NO;
     }
     struct rebinding rb[] = {

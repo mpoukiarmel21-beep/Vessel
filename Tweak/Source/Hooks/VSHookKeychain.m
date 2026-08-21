@@ -130,6 +130,11 @@ static NSArray *VSMatchingPersistentRefs(NSDictionary *query) {
     e[(__bridge id)kSecReturnAttributes]    = @YES;
     e[(__bridge id)kSecReturnPersistentRef] = @YES;
     e[(__bridge id)kSecMatchLimit]          = (__bridge id)kSecMatchLimitAll;
+    // A match-all query defaults to non-synchronizable rows only. Instagram can
+    // store a synchronizable (iCloud Keychain) session row; without this it would
+    // be invisible to enumeration, so it could neither be scoped nor cleared and
+    // would bleed across containers. "Any" covers both local and synchronizable.
+    e[(__bridge id)kSecAttrSynchronizable]  = (__bridge id)kSecAttrSynchronizableAny;
 
     CFTypeRef out = NULL;
     OSStatus st = orig_SecItemCopyMatching((__bridge CFDictionaryRef)e, &out);
@@ -154,6 +159,9 @@ static OSStatus VSFetchOne(NSData *ref, NSDictionary *callerQuery, CFTypeRef *ou
     NSMutableDictionary *q = [callerQuery mutableCopy];
     q[(__bridge id)kSecMatchLimit] = (__bridge id)kSecMatchLimitOne;
     q[(__bridge id)kSecValuePersistentRef] = ref;
+    // The ref may name a synchronizable row (see VSMatchingPersistentRefs); the
+    // caller's query might not have opted into those, so make sure it can be read.
+    q[(__bridge id)kSecAttrSynchronizable] = (__bridge id)kSecAttrSynchronizableAny;
     return orig_SecItemCopyMatching((__bridge CFDictionaryRef)q, out);
 }
 
@@ -192,7 +200,9 @@ static OSStatus VSBroadDelete(NSDictionary *query) {
     OSStatus last = errSecSuccess;
     for (NSData *ref in refs) {
         OSStatus st = orig_SecItemDelete((__bridge CFDictionaryRef)
-                        @{ (__bridge id)kSecValuePersistentRef: ref });
+                        @{ (__bridge id)kSecValuePersistentRef: ref,
+                           (__bridge id)kSecAttrSynchronizable:
+                               (__bridge id)kSecAttrSynchronizableAny });
         if (st != errSecSuccess && st != errSecItemNotFound) last = st;
     }
     return last;
@@ -204,7 +214,9 @@ static OSStatus VSBroadUpdate(NSDictionary *query, NSDictionary *prefixedUpdate)
     OSStatus last = errSecSuccess;
     for (NSData *ref in refs) {
         OSStatus st = orig_SecItemUpdate((__bridge CFDictionaryRef)
-                        @{ (__bridge id)kSecValuePersistentRef: ref },
+                        @{ (__bridge id)kSecValuePersistentRef: ref,
+                           (__bridge id)kSecAttrSynchronizable:
+                               (__bridge id)kSecAttrSynchronizableAny },
                                          (__bridge CFDictionaryRef)prefixedUpdate);
         if (st != errSecSuccess && st != errSecItemNotFound) last = st;
     }

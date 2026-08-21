@@ -26,9 +26,14 @@
 /// Root that becomes the fake HOME for a given container.
 + (NSString *)rootForContainerID:(NSString *)cid;
 
-/// Tweak-private subdir inside a container (aux stores: defaults, cookies).
-/// Lives inside the container so it is wiped together with it.
+/// Tweak-private subdir for a container (aux stores: defaults, cookies). Lives
+/// OUTSIDE the container root, under vesselRoot/private/<cid>, so it is invisible
+/// to Instagram's redirected HOME and never reads as a foreign folder in the app's
+/// home. Purged explicitly on container delete / reset.
 + (NSString *)privateDirForContainerID:(NSString *)cid;
+
+/// <vesselRoot>/private — parent of every container's private store.
++ (NSString *)privateRoot;
 
 /// Creates the standard iOS data-container skeleton so Instagram never has to
 /// mkdir a directory it assumes already exists.

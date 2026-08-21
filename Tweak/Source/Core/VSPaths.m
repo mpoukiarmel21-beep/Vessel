@@ -38,7 +38,23 @@ static NSString *gRealHome = nil;
 }
 
 + (NSString *)privateDirForContainerID:(NSString *)cid {
-    return [[self rootForContainerID:cid] stringByAppendingPathComponent:@"_vessel"];
+    if (cid.length == 0) return @"";
+    // OUTSIDE the container root, under vesselRoot — which VSHookHome's VSMapPath
+    // deliberately excludes from redirection. Two reasons it must not live inside
+    // the container: (1) the container root becomes Instagram's HOME, and a folder
+    // full of our aux stores (cookies.plist, defaults.plist) sitting in the app's
+    // home is a plain "this app is modified" tell; (2) keeping it out means our
+    // stores are never handed to Instagram through any redirected path. It is wiped
+    // explicitly on container delete / reset (see VSManager), not by removing the
+    // container tree.
+    return [[[self vesselRoot] stringByAppendingPathComponent:@"private"]
+            stringByAppendingPathComponent:cid];
+}
+
+/// <vesselRoot>/private — parent of every container's private store. One directory
+/// to remove on a full reset.
++ (NSString *)privateRoot {
+    return [[self vesselRoot] stringByAppendingPathComponent:@"private"];
 }
 
 + (NSString *)statePath {
@@ -65,8 +81,7 @@ static NSString *gRealHome = nil;
                        @"Library/SplashBoard",
                        @"Library/WebKit",
                        @"SystemData",
-                       @"tmp",
-                       @"_vessel" ];
+                       @"tmp" ];
     for (NSString *s in subs) {
         NSString *p = [root stringByAppendingPathComponent:s];
         NSError *e = nil;

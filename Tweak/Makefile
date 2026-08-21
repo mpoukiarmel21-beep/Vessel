@@ -88,7 +88,18 @@ VESSEL_PHASE7 = \
 	Source/UI/VSMapPickerVC.m \
 	Source/UI/VSDiagnosticsVC.m
 
-Vessel_FILES = $(VESSEL_PHASE1) $(VESSEL_PHASE2) $(VESSEL_PHASE3) $(VESSEL_PHASE4) $(VESSEL_PHASE5) $(VESSEL_PHASE6) $(VESSEL_PHASE7)
+# Phase 8 : durcissement anti-detection. VSHookWebKit isole la couche 4b
+# (WKWebsiteDataStore hors-processus, non couverte par le pot de cookies) via un
+# store persistant par container (dataStoreForIdentifier:, iOS 17+ ; passif avant).
+# VSHookImage masque notre propre dylib de l'enumeration des images chargees
+# (_dyld_image_count / _dyld_get_image_name rebindes par fishhook, installe EN
+# DERNIER pour ne pas corrompre l'iteration interne de fishhook). WebKit n'est PAS
+# lie : resolu par nom (NSClassFromString). CommonCrypto (CC_MD5) est dans libSystem.
+VESSEL_PHASE8 = \
+	Source/Hooks/VSHookWebKit.m \
+	Source/Hooks/VSHookImage.m
+
+Vessel_FILES = $(VESSEL_PHASE1) $(VESSEL_PHASE2) $(VESSEL_PHASE3) $(VESSEL_PHASE4) $(VESSEL_PHASE5) $(VESSEL_PHASE6) $(VESSEL_PHASE7) $(VESSEL_PHASE8)
 
 Vessel_CFLAGS = -fobjc-arc \
 	-I$(THEOS_PROJECT_DIR)/Source \

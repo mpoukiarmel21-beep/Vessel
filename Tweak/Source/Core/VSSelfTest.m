@@ -11,9 +11,11 @@
 #import "../Hooks/VSHookKeychain.h"
 #import "../Hooks/VSHookDefaults.h"
 #import "../Hooks/VSHookCookies.h"
+#import "../Hooks/VSHookWebKit.h"
 #import "../Hooks/VSHookDevice.h"
 #import "../Hooks/VSHookLocation.h"
 #import "../Hooks/VSHookLocale.h"
+#import "../Hooks/VSHookImage.h"
 #import <UIKit/UIKit.h>
 #import <math.h>
 
@@ -274,6 +276,17 @@ static void VSTestIsolation(void) {
     NSString *l4 = [VSHookCookies firstLeak];
     VSCheck(l4 == nil, @"isolation/layer4-cookies", l4);
 
+    // Layer 4b is allowed to be absent: on a pre-iOS 17 OS (or if WebKit is missing)
+    // it installs nothing by design and the app stays on the shared web store — a
+    // documented, non-regressing fallback, so treat "not installed" as a note, not a
+    // failure. When it IS installed we hold it to the same zero-leak bar as the rest.
+    if ([VSHookWebKit isInstalled]) {
+        NSString *l4b = [VSHookWebKit firstLeak];
+        VSCheck(l4b == nil, @"isolation/layer4b-webkit", l4b);
+    } else {
+        VSNote(@"isolation/layer4b-webkit: not installed (shared web store) — non-fatal");
+    }
+
     NSString *l5 = [VSHookDevice firstLeak];
     VSCheck(l5 == nil, @"identity/device-hook", l5);
 
@@ -282,6 +295,17 @@ static void VSTestIsolation(void) {
 
     NSString *l7 = [VSHookLocation firstLeak];
     VSCheck(l7 == nil, @"identity/location-hook", l7);
+
+    // Image cloak is anti-detection, not isolation, and is not gated on HOME; if it
+    // could not install (dladdr/dlsym/rebind miss) the image list is simply genuine,
+    // which regresses nothing — a note, not a failure. When active it must actually
+    // hide our image.
+    if ([VSHookImage isInstalled]) {
+        NSString *l8 = [VSHookImage firstLeak];
+        VSCheck(l8 == nil, @"anti-detect/image-cloak", l8);
+    } else {
+        VSNote(@"anti-detect/image-cloak: not active — non-fatal");
+    }
 }
 
 #pragma mark - Report

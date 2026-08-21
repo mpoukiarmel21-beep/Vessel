@@ -27,9 +27,11 @@
 #import "Hooks/VSHookKeychain.h"
 #import "Hooks/VSHookDefaults.h"
 #import "Hooks/VSHookCookies.h"
+#import "Hooks/VSHookWebKit.h"
 #import "Hooks/VSHookDevice.h"
 #import "Hooks/VSHookLocation.h"
 #import "Hooks/VSHookLocale.h"
+#import "Hooks/VSHookImage.h"
 #import "UI/VSUIController.h"
 
 /// Set when the crash streak trips the breaker. Modules must consult this and
@@ -119,6 +121,17 @@ static void VSBootstrapMain(void) {
         if (home && !cook)
             VSLogE(@"boot", @"layer 4 (cookies) did not install — web sessions may leak between containers");
 
+        // Layer 4b (WebKit): a WKWebView keeps its cookies and localStorage in an
+        // out-of-process WKWebsiteDataStore the shared cookie jar above does not
+        // cover. No breadcrumb — the VSBootStep enum is frozen (see VSLog.h) and the
+        // "furthest breadcrumb = guilty module" invariant must hold, so this logs
+        // instead. Gated on HOME with the rest of the isolation block. A NO here is
+        // non-fatal (pre-iOS 17 or WebKit absent): the app stays on the shared store.
+        BOOL web = home ? [VSHookWebKit installForContainerID:active.cid] : NO;
+        if (home)
+            VSLogI(@"boot", @"layer 4b (WebKit): %@",
+                   web ? @"isolated" : @"not isolated (shared default store)");
+
         // Layer 5 (identity): make the active container look like a different
         // iPhone. Gated on HOME like the isolation layers — if we are running
         // unmodified (no container isolation), there is no per-container identity
@@ -148,6 +161,16 @@ static void VSBootstrapMain(void) {
         [log breadcrumb:VSBootStepLocaleHooked
                    note:(loc ? @"locale/timezone aligned"
                               : (home ? @"locale install refused" : @"skipped (HOME refused)"))];
+
+        // Layer 7 (image cloak): hide our own dylib from the loaded-image walk.
+        // Installed LAST — after every fishhook rebind above — because it rebinds
+        // _dyld_image_count/name, and doing that before another rebind would corrupt
+        // fishhook's own image iteration (see VSHookImage.h). NOT gated on HOME: it
+        // isolates no state, it only removes the "this process is modified" tell, so
+        // it is worth doing even when we are otherwise running unmodified. No
+        // breadcrumb (the VSBootStep enum is frozen); logs instead.
+        BOOL cloak = [VSHookImage install];
+        VSLogI(@"boot", @"image cloak: %@", cloak ? @"active" : @"inactive (image list genuine)");
     } else {
         [log breadcrumb:VSBootStepHomeHooked note:@"skipped (safe mode)"];
     }

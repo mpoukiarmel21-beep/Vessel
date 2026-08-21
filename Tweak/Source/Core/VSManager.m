@@ -4,6 +4,7 @@
 #import "VSPaths.h"
 #import "VSStore.h"
 #import "VSLog.h"
+#import "../Hooks/VSHookWebKit.h"
 
 NSString *const VSContainersDidChangeNotification = @"VSContainersDidChange";
 
@@ -292,6 +293,16 @@ static NSError *VSErr(NSInteger code, NSString *msg) {
         if (err) *err = fe;
         return NO;
     }
+    // The private store sits outside the container tree (vesselRoot/private/<cid>),
+    // so removing the root above never touches it — purge it explicitly. Best-effort:
+    // the account row still goes even if this stray dir cannot be removed. WebKit
+    // storage lives in WebKit's own process; ask it to drop this container's store.
+    NSString *priv = [VSPaths privateDirForContainerID:cid];
+    if (priv.length && [NSFileManager.defaultManager fileExistsAtPath:priv] &&
+        ![NSFileManager.defaultManager removeItemAtPath:priv error:&fe])
+        VSLogW(@"manager", @"delete %@: private store: %@", cid, fe.localizedDescription);
+    [VSHookWebKit purgeStoreForContainerID:cid];
+
     [_containers removeObject:c];
     BOOL ok = [self persistList];
     VSLogI(@"manager", @"deleted %@ (%@)", c.name, cid);
@@ -344,6 +355,9 @@ static NSError *VSErr(NSInteger code, NSString *msg) {
             VSLogE(@"manager", @"reset: %@ (%@): %@", c.name, c.cid, fe.localizedDescription);
             if (!first) first = fe;
         }
+        // WebKit storage is out of process and keyed by container id, so it is not
+        // under any tree removed here — drop each one explicitly.
+        [VSHookWebKit purgeStoreForContainerID:c.cid];
     }
 
     NSString *croot = [VSPaths containersRoot];
@@ -354,6 +368,17 @@ static NSError *VSErr(NSInteger code, NSString *msg) {
             VSLogE(@"manager", @"reset: orphan %@: %@", entry, fe.localizedDescription);
             if (!first) first = fe;
         }
+    }
+
+    // Every container's private store lives under vesselRoot/private (outside the
+    // container trees, so untouched above); one removal clears them all — cookies,
+    // defaults, and any other aux store. VSStore recreates the parent for the fresh
+    // default on first write.
+    NSString *priv = [VSPaths privateRoot];
+    NSError *pe = nil;
+    if ([fm fileExistsAtPath:priv] && ![fm removeItemAtPath:priv error:&pe]) {
+        VSLogE(@"manager", @"reset: private root: %@", pe.localizedDescription);
+        if (!first) first = pe;
     }
 
     // The list and the active/pending selection go too. The diagnostics
