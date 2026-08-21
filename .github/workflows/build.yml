@@ -50,6 +50,27 @@ jobs:
             tar -xzf master.tar.gz -C "$THEOS/sdks/" --strip-components=1
             rm -f master.tar.gz
           fi
+
+          # Theos signs its output with ldid. Cloning Theos directly (instead of
+          # running its installer) does not provide it, and the macOS runner
+          # ships codesign but not ldid — the build then dies at "Signing …"
+          # with "ldid: command not found". Install into $THEOS/bin so the
+          # Theos cache carries it to subsequent runs. (This signature is
+          # irrelevant to the shipped product: the IPA step re-signs ad-hoc and
+          # Sideloadly re-signs again.)
+          if ! command -v ldid >/dev/null 2>&1 && [ ! -x "$THEOS/bin/ldid" ]; then
+            mkdir -p "$THEOS/bin"
+            curl -sSL -o "$THEOS/bin/ldid" \
+              https://github.com/ProcursusTeam/ldid/releases/latest/download/ldid_macosx_arm64 || true
+            chmod +x "$THEOS/bin/ldid" 2>/dev/null || true
+            if [ ! -s "$THEOS/bin/ldid" ] || ! file "$THEOS/bin/ldid" | grep -q 'Mach-O'; then
+              echo "prebuilt ldid unusable, falling back to Homebrew"
+              rm -f "$THEOS/bin/ldid"
+              brew install ldid
+            fi
+          fi
+          ls -l "$THEOS/bin/ldid" 2>/dev/null || command -v ldid
+
           echo "THEOS=$THEOS" >> $GITHUB_ENV
           echo "$THEOS/bin" >> $GITHUB_PATH
           ls "$THEOS/sdks" | head
