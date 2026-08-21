@@ -1,0 +1,14 @@
+* text=auto eol=lf
+
+# These are executed on a macOS runner. A CRLF here breaks make and bash in
+# ways that are slow to diagnose (`make: *** missing separator`, `\r: command
+# not found`), so pin them regardless of the developer's platform.
+Makefile        text eol=lf
+*.mk            text eol=lf
+*.yml           text eol=lf
+*.sh            text eol=lf
+*.py            text eol=lf
+
+*.ipa           binary
+*.dylib         binary
+*.png           binary
