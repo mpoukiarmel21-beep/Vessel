@@ -7,45 +7,65 @@
 #import <string.h>
 #import <math.h>
 
-/// One row per model iOS 26 can actually run (A13 and up: iPhone 11 and later).
-/// Pixel size is the NATIVE portrait resolution, which is what Instagram's UA
-/// reports and what therefore has to agree with the model name.
+/// One row per model iOS 26 can actually run (A13 and up: iPhone 11 and later,
+/// plus iPhone SE 2nd/3rd generation). Pixel size is the NATIVE portrait
+/// resolution, which is what Instagram's UA reports and what therefore has to
+/// agree with the model name. Board ids are the real board configurations, cross
+/// checked against theapplewiki and the ipsw.me device API — a made-up hw.model
+/// paired with a genuine hw.machine is exactly the kind of mismatch that is
+/// cheap for a server to test and impossible to explain away.
 typedef struct {
     const char *machine;   // hw.machine
     const char *board;     // hw.model
     const char *name;      // marketing name, our UI only
     int wPx, hPx;          // native portrait pixels
     int scale;
-    int memGB;             // hw.memsize
+    int memGB;             // nominal RAM, scaled against the real hw.memsize
     int cores;             // hw.ncpu / hw.logicalcpu / hw.physicalcpu
 } VSModelSpec;
 
 static const VSModelSpec kModels[] = {
     // A13
-    { "iPhone12,1", "N104AP", "iPhone 11",           828, 1792, 2, 4, 6 },
-    { "iPhone12,3", "D421AP", "iPhone 11 Pro",      1125, 2436, 3, 4, 6 },
-    { "iPhone12,5", "D431AP", "iPhone 11 Pro Max",  1242, 2688, 3, 4, 6 },
+    { "iPhone12,1", "N104AP", "iPhone 11",           828, 1792, 2,  4, 6 },
+    { "iPhone12,3", "D421AP", "iPhone 11 Pro",      1125, 2436, 3,  4, 6 },
+    { "iPhone12,5", "D431AP", "iPhone 11 Pro Max",  1242, 2688, 3,  4, 6 },
+    { "iPhone12,8", "D79AP",  "iPhone SE (2020)",    750, 1334, 2,  3, 6 },
     // A14
-    { "iPhone13,1", "D52gAP", "iPhone 12 mini",     1080, 2340, 3, 4, 6 },
-    { "iPhone13,2", "D53gAP", "iPhone 12",          1170, 2532, 3, 4, 6 },
-    { "iPhone13,3", "D53pAP", "iPhone 12 Pro",      1170, 2532, 3, 6, 6 },
-    { "iPhone13,4", "D54pAP", "iPhone 12 Pro Max",  1284, 2778, 3, 6, 6 },
+    { "iPhone13,1", "D52gAP", "iPhone 12 mini",     1080, 2340, 3,  4, 6 },
+    { "iPhone13,2", "D53gAP", "iPhone 12",          1170, 2532, 3,  4, 6 },
+    { "iPhone13,3", "D53pAP", "iPhone 12 Pro",      1170, 2532, 3,  6, 6 },
+    { "iPhone13,4", "D54pAP", "iPhone 12 Pro Max",  1284, 2778, 3,  6, 6 },
     // A15
-    { "iPhone14,4", "D16AP",  "iPhone 13 mini",     1080, 2340, 3, 4, 6 },
-    { "iPhone14,5", "D17AP",  "iPhone 13",          1170, 2532, 3, 4, 6 },
-    { "iPhone14,2", "D63AP",  "iPhone 13 Pro",      1170, 2532, 3, 6, 6 },
-    { "iPhone14,3", "D64AP",  "iPhone 13 Pro Max",  1284, 2778, 3, 6, 6 },
-    { "iPhone14,7", "D27AP",  "iPhone 14",          1170, 2532, 3, 6, 6 },
-    { "iPhone14,8", "D28AP",  "iPhone 14 Plus",     1284, 2778, 3, 6, 6 },
+    { "iPhone14,4", "D16AP",  "iPhone 13 mini",     1080, 2340, 3,  4, 6 },
+    { "iPhone14,5", "D17AP",  "iPhone 13",          1170, 2532, 3,  4, 6 },
+    { "iPhone14,2", "D63AP",  "iPhone 13 Pro",      1170, 2532, 3,  6, 6 },
+    { "iPhone14,3", "D64AP",  "iPhone 13 Pro Max",  1284, 2778, 3,  6, 6 },
+    { "iPhone14,6", "D49AP",  "iPhone SE (2022)",    750, 1334, 2,  4, 6 },
+    { "iPhone14,7", "D27AP",  "iPhone 14",          1170, 2532, 3,  6, 6 },
+    { "iPhone14,8", "D28AP",  "iPhone 14 Plus",     1284, 2778, 3,  6, 6 },
     // A16
-    { "iPhone15,2", "D73AP",  "iPhone 14 Pro",      1179, 2556, 3, 6, 6 },
-    { "iPhone15,3", "D74AP",  "iPhone 14 Pro Max",  1290, 2796, 3, 6, 6 },
-    { "iPhone15,4", "D37AP",  "iPhone 15",          1179, 2556, 3, 6, 6 },
-    { "iPhone15,5", "D38AP",  "iPhone 15 Plus",     1290, 2796, 3, 6, 6 },
+    { "iPhone15,2", "D73AP",  "iPhone 14 Pro",      1179, 2556, 3,  6, 6 },
+    { "iPhone15,3", "D74AP",  "iPhone 14 Pro Max",  1290, 2796, 3,  6, 6 },
+    { "iPhone15,4", "D37AP",  "iPhone 15",          1179, 2556, 3,  6, 6 },
+    { "iPhone15,5", "D38AP",  "iPhone 15 Plus",     1290, 2796, 3,  6, 6 },
     // A17 Pro
-    { "iPhone16,1", "D83AP",  "iPhone 15 Pro",      1179, 2556, 3, 8, 6 },
-    { "iPhone16,2", "D84AP",  "iPhone 15 Pro Max",  1290, 2796, 3, 8, 6 },
+    { "iPhone16,1", "D83AP",  "iPhone 15 Pro",      1179, 2556, 3,  8, 6 },
+    { "iPhone16,2", "D84AP",  "iPhone 15 Pro Max",  1290, 2796, 3,  8, 6 },
+    // A18
+    { "iPhone17,3", "D47AP",  "iPhone 16",          1179, 2556, 3,  8, 6 },
+    { "iPhone17,4", "D48AP",  "iPhone 16 Plus",     1290, 2796, 3,  8, 6 },
+    { "iPhone17,5", "V59AP",  "iPhone 16e",         1170, 2532, 3,  8, 6 },
+    // A18 Pro
+    { "iPhone17,1", "D93AP",  "iPhone 16 Pro",      1206, 2622, 3,  8, 6 },
+    { "iPhone17,2", "D94AP",  "iPhone 16 Pro Max",  1320, 2868, 3,  8, 6 },
+    // A19
+    { "iPhone18,3", "V57AP",  "iPhone 17",          1206, 2622, 3,  8, 6 },
+    // A19 Pro
+    { "iPhone18,1", "V53AP",  "iPhone 17 Pro",      1206, 2622, 3, 12, 6 },
+    { "iPhone18,2", "V54AP",  "iPhone 17 Pro Max",  1320, 2868, 3, 12, 6 },
+    { "iPhone18,4", "D23AP",  "iPhone Air",         1260, 2736, 3, 12, 6 },
 };
+
 static const int kModelCount = (int)(sizeof(kModels) / sizeof(kModels[0]));
 
 /// Apple-registered OUIs. A MAC is only reachable through getifaddrs, which on
@@ -144,6 +164,20 @@ static NSArray<NSNumber *> *VSModelsMatchingScreen(int w, int h, int scale) {
     return out;
 }
 
+/// hw.memsize for a model with `gb` GB of nominal RAM, derived from the real
+/// reading rather than computed as gb × 2^30. The kernel does not necessarily
+/// report a round power of two (firmware and hardware carve-outs come off the
+/// top first), and whatever shape the real device's value has, the spoofed one
+/// keeps it. When the chosen model has the same nominal RAM as the real phone —
+/// the common case, since the model pool is screen-matched and screen size
+/// correlates with RAM — the value returned is the real one, byte for byte.
+static unsigned long long VSMemSizeForGB(int gb) {
+    unsigned long long real = [VSIdentity realMemSize];   // never 0, see +realMemSize
+    int realGB = (int)llround((double)real / 1073741824.0);
+    if (gb <= 0 || realGB <= 0 || gb == realGB) return real;
+    return (unsigned long long)llround((double)real * (double)gb / (double)realGB);
+}
+
 @implementation VSIdentity
 
 + (void)snapshotRealHardware {
@@ -194,7 +228,7 @@ static NSArray<NSNumber *> *VSModelsMatchingScreen(int w, int h, int scale) {
         id_.machine         = @(m->machine);
         id_.boardID         = @(m->board);
         id_.marketingName   = @(m->name);
-        id_.memSize         = (unsigned long long)m->memGB * 1073741824ULL;
+        id_.memSize         = VSMemSizeForGB(m->memGB);
         id_.cpuCount        = m->cores;
         id_.physicalCPUCount= m->cores;
     } else {

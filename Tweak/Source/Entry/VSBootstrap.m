@@ -14,13 +14,15 @@
 //    4. snapshot the REAL hardware       (before any sysctl rebinding exists)
 //    5. load containers, resolve the active one
 //    6. install hooks, cheapest/safest first
-//    7. schedule UI once UIApplication exists
+//    7. self-test                        (re-proves 1-6 actually held, on device)
+//    8. schedule UI once UIApplication exists
 
 #import <UIKit/UIKit.h>
 #import "Core/VSLog.h"
 #import "Core/VSPaths.h"
 #import "Core/VSIdentity.h"
 #import "Core/VSManager.h"
+#import "Core/VSSelfTest.h"
 
 /// Set when the crash streak trips the breaker. Modules must consult this and
 /// no-op rather than install anything.
@@ -69,6 +71,16 @@ static void VSBootstrapMain(void) {
                      (long)VSManager.shared.bootCount, active.name, active.cid,
                      (unsigned long)VSManager.shared.containers.count]];
     VSLogI(@"boot", @"identity: %@", active.identity.shortDescription);
+
+    // --- 7. self-test ----------------------------------------------------
+    // Runs last so it can verify what the earlier steps installed; the hooks of
+    // step 6 slot in immediately above this line as each phase lands. It reports
+    // failures, it never raises them — this is the one place where a bug in the
+    // verification code could take Instagram down, and it must not.
+    [VSSelfTest runAtBoot];
+    NSArray<NSString *> *lines = [VSSelfTest.lastReport componentsSeparatedByString:@"\n"];
+    [log breadcrumb:VSBootStepSelfTestDone
+               note:(lines.count > 1 ? lines[1] : @"self-test ran")];
 
     VSLogI(@"boot", @"Vessel ready (safeMode=%@)", VSSafeModeActive ? @"YES" : @"NO");
 }

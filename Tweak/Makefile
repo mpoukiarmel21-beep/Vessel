@@ -31,7 +31,8 @@ VESSEL_PHASE1 = \
 VESSEL_PHASE2 = \
 	Source/Core/VSIdentity.m \
 	Source/Core/VSContainer.m \
-	Source/Core/VSManager.m
+	Source/Core/VSManager.m \
+	Source/Core/VSSelfTest.m
 
 Vessel_FILES = $(VESSEL_PHASE1) $(VESSEL_PHASE2)
 
