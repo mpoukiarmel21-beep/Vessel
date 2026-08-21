@@ -28,6 +28,7 @@
 #import "Hooks/VSHookDefaults.h"
 #import "Hooks/VSHookCookies.h"
 #import "Hooks/VSHookDevice.h"
+#import "Hooks/VSHookLocation.h"
 #import "Hooks/VSHookLocale.h"
 
 /// Set when the crash streak trips the breaker. Modules must consult this and
@@ -121,13 +122,26 @@ static void VSBootstrapMain(void) {
         // iPhone. Gated on HOME like the isolation layers — if we are running
         // unmodified (no container isolation), there is no per-container identity
         // to project, and spoofing a lone real account's device would be pointless
-        // and inconsistent. Device first (fingerprint sources), then locale.
+        // and inconsistent. Order: device (fingerprint sources), then location
+        // (GPS), then locale (clock/formatting) — the full identity block.
         BOOL dev = home ? [VSHookDevice installWithIdentity:active.identity] : NO;
         [log breadcrumb:VSBootStepDeviceHooked
                    note:(dev ? @"device identity spoofed"
                               : (home ? @"device install refused" : @"skipped (HOME refused)"))];
         if (home && !dev)
             VSLogE(@"boot", @"layer 5 (device) did not install — model/IDFV/serial are the real device's");
+
+        // Layer 6 (fake GPS): drive CoreLocation to the container's chosen city.
+        // Installs PASSIVE (touches nothing) when the container has no base
+        // location, which is the default — so this is a no-op until the user
+        // pins a location. Between device and locale so the whole identity block
+        // (fingerprint → position → clock/formatting) lands together.
+        BOOL gps = home ? [VSHookLocation installForContainer:active] : NO;
+        [log breadcrumb:VSBootStepLocationHooked
+                   note:(gps ? @"location ready"
+                              : (home ? @"location install refused" : @"skipped (HOME refused)"))];
+        if (home && !gps)
+            VSLogE(@"boot", @"layer 6 (location) did not install — real GPS position is exposed");
 
         BOOL loc = home ? [VSHookLocale installWithIdentity:active.identity] : NO;
         [log breadcrumb:VSBootStepLocaleHooked

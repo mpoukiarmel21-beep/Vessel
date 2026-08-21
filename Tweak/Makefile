@@ -58,7 +58,17 @@ VESSEL_PHASE5 = \
 	Source/Hooks/VSHookDevice.m \
 	Source/Hooks/VSHookLocale.m
 
-Vessel_FILES = $(VESSEL_PHASE1) $(VESSEL_PHASE2) $(VESSEL_PHASE3) $(VESSEL_PHASE4) $(VESSEL_PHASE5)
+# Phase 6 : fake GPS. VSHookLocation pilote la surface CLLocationManager (getter
+# location, start/stopUpdatingLocation en FLUX continu, requestLocation, changements
+# significatifs, autorisation + precision, locationServicesEnabled) pour projeter la
+# ville du container avec un signal realiste (derive de quelques metres, precision
+# 5-12 m variable, vitesse/cap -1 a l'arret, timestamp live). Opt-in par container et
+# gele au lancement : sans position de base, la couche s'installe PASSIVE (ne swizzle
+# rien). CoreLocation est deja lie ; hooks ObjC purs (method_setImplementation).
+VESSEL_PHASE6 = \
+	Source/Hooks/VSHookLocation.m
+
+Vessel_FILES = $(VESSEL_PHASE1) $(VESSEL_PHASE2) $(VESSEL_PHASE3) $(VESSEL_PHASE4) $(VESSEL_PHASE5) $(VESSEL_PHASE6)
 
 Vessel_CFLAGS = -fobjc-arc \
 	-I$(THEOS_PROJECT_DIR)/Source \

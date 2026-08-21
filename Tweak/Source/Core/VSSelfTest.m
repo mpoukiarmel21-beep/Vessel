@@ -12,6 +12,7 @@
 #import "../Hooks/VSHookDefaults.h"
 #import "../Hooks/VSHookCookies.h"
 #import "../Hooks/VSHookDevice.h"
+#import "../Hooks/VSHookLocation.h"
 #import "../Hooks/VSHookLocale.h"
 #import <UIKit/UIKit.h>
 #import <math.h>
@@ -251,12 +252,14 @@ static void VSTestContainers(void) {
 /// in this container's private store on disk, not in the process-wide plist or
 /// cookie jar. Layer 5 (identity) reads the spoofed sources — sysctl/uname/UIDevice
 /// /ASIdentifierManager, and NSTimeZone/NSLocale — back through the public API and
-/// proves they describe the container, not the real phone. In safe mode the hooks
-/// are deliberately absent, so "not installed" is the expected state and is a note,
-/// not a failure.
+/// proves they describe the container, not the real phone. Layer 6 (fake GPS) reads
+/// CoreLocation back — services enabled, authorization, and a fix near the container's
+/// base point — or is a silent pass when the container pins no location. In safe mode
+/// the hooks are deliberately absent, so "not installed" is the expected state and is
+/// a note, not a failure.
 static void VSTestIsolation(void) {
     if (VSSafeModeActive) {
-        VSNote(@"isolation: hooks disabled (safe mode) — layer 1-5 + locale checks skipped");
+        VSNote(@"isolation: hooks disabled (safe mode) — layer 1-6 checks skipped");
         return;
     }
     NSString *l1 = [VSHookHome firstLeak];
@@ -276,6 +279,9 @@ static void VSTestIsolation(void) {
 
     NSString *l6 = [VSHookLocale firstLeak];
     VSCheck(l6 == nil, @"identity/locale-hook", l6);
+
+    NSString *l7 = [VSHookLocation firstLeak];
+    VSCheck(l7 == nil, @"identity/location-hook", l7);
 }
 
 #pragma mark - Report
