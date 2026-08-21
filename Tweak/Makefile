@@ -68,7 +68,27 @@ VESSEL_PHASE5 = \
 VESSEL_PHASE6 = \
 	Source/Hooks/VSHookLocation.m
 
-Vessel_FILES = $(VESSEL_PHASE1) $(VESSEL_PHASE2) $(VESSEL_PHASE3) $(VESSEL_PHASE4) $(VESSEL_PHASE5) $(VESSEL_PHASE6)
+# Phase 7 : couche UI. VSTheme centralise les tokens de design ; VSOverlayWindow
+# est une UIWindow a passthrough (hitTest laisse passer les touches hors du bouton,
+# canBecomeKeyWindow=NO) pour ne jamais voler le focus a Instagram (source des gels
+# de l'ancien projet) ; VSFloatingButton est le bouton flottant draggable a
+# aimantation de bord ; VSUIController attache l'overlay des qu'une UIWindowScene est
+# active et presente le panneau depuis le VC du sommet d'Instagram ; VSPanelVC est le
+# panneau principal (liste des containers, creer, diagnostics, tout reinitialiser) ;
+# VSCreateVC l'assistant de creation ; VSMapPickerVC le choix de localisation ;
+# VSDiagnosticsVC le retour terrain (journaux, auto-test, sink distant opt-in).
+# UIKit et MapKit sont deja lies (cf. Vessel_FRAMEWORKS).
+VESSEL_PHASE7 = \
+	Source/UI/VSTheme.m \
+	Source/UI/VSOverlayWindow.m \
+	Source/UI/VSFloatingButton.m \
+	Source/UI/VSUIController.m \
+	Source/UI/VSPanelVC.m \
+	Source/UI/VSCreateVC.m \
+	Source/UI/VSMapPickerVC.m \
+	Source/UI/VSDiagnosticsVC.m
+
+Vessel_FILES = $(VESSEL_PHASE1) $(VESSEL_PHASE2) $(VESSEL_PHASE3) $(VESSEL_PHASE4) $(VESSEL_PHASE5) $(VESSEL_PHASE6) $(VESSEL_PHASE7)
 
 Vessel_CFLAGS = -fobjc-arc \
 	-I$(THEOS_PROJECT_DIR)/Source \

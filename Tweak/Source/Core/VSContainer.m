@@ -6,6 +6,7 @@
 
 static NSString *const kCID   = @"cid";
 static NSString *const kName  = @"name";
+static NSString *const kColor = @"color";
 static NSString *const kIdent = @"ident";
 static NSString *const kDflt  = @"default";
 static NSString *const kMade  = @"createdAt";
@@ -45,6 +46,7 @@ static NSString *const kNote  = @"note";
     VSContainer *c = [VSContainer new];
     c->_cid = [cid copy];
     c.name            = d[kName] ?: @"Container";
+    c.colorHex        = d[kColor];
     c.identity        = [VSIdentity identityWithDictionary:d[kIdent]];
     c.isDefault       = [d[kDflt] boolValue];
     c.createdAt       = d[kMade] ?: [NSDate date];
@@ -62,6 +64,7 @@ static NSString *const kNote  = @"note";
     NSMutableDictionary *d = [NSMutableDictionary dictionary];
     d[kCID]   = _cid ?: @"";
     d[kName]  = _name ?: @"";
+    if (_colorHex.length) d[kColor] = _colorHex;
     d[kDflt]  = @(_isDefault);
     d[kMade]  = _createdAt ?: [NSDate date];
     d[kUsed]  = _lastUsedAt ?: _createdAt ?: [NSDate date];

@@ -30,6 +30,7 @@
 #import "Hooks/VSHookDevice.h"
 #import "Hooks/VSHookLocation.h"
 #import "Hooks/VSHookLocale.h"
+#import "UI/VSUIController.h"
 
 /// Set when the crash streak trips the breaker. Modules must consult this and
 /// no-op rather than install anything.
@@ -162,6 +163,14 @@ static void VSBootstrapMain(void) {
                note:(lines.count > 1 ? lines[1] : @"self-test ran")];
 
     VSLogI(@"boot", @"Vessel ready (safeMode=%@)", VSSafeModeActive ? @"YES" : @"NO");
+
+    // --- 8. UI -----------------------------------------------------------
+    // Scheduled even in safe mode: the floating button is how the user reaches
+    // Diagnostics and the container list to recover, so it must appear exactly
+    // when hooks are off. scheduleAttach waits for a live UIWindowScene, then
+    // adds the overlay window; it never blocks the constructor.
+    [log breadcrumb:VSBootStepUIScheduled note:@"scheduling UI attach"];
+    [VSUIController scheduleAttach];
 }
 
 

@@ -25,6 +25,11 @@
 @property (nonatomic, copy) NSString *name;
 @property (nonatomic, strong) VSIdentity *identity;
 
+/// User-chosen accent color as "#RRGGBB", shown as the button ring and the card
+/// pastille so accounts are recognisable at a glance. Optional: when nil the UI
+/// derives a stable color from `cid`, so an older entry still looks intentional.
+@property (nonatomic, copy) NSString *colorHex;
+
 /// The default container cannot be deleted or renamed away; "Tout réinitialiser"
 /// recreates it empty. Without it the app would have no working state at all if
 /// the user deleted every container.
