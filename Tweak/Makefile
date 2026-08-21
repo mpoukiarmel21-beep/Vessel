@@ -47,7 +47,18 @@ VESSEL_PHASE4 = \
 	Source/Hooks/VSHookDefaults.m \
 	Source/Hooks/VSHookCookies.m
 
-Vessel_FILES = $(VESSEL_PHASE1) $(VESSEL_PHASE2) $(VESSEL_PHASE3) $(VESSEL_PHASE4)
+# Phase 5 : identite par container. VSHookDevice falsifie les SOURCES que lit
+# Instagram (sysctl/sysctlbyname/uname, IOKit IOPlatform*, MobileGestalt, UIDevice,
+# ASIdentifierManager, ATTrackingManager) pour que son User-Agent decrive un autre
+# iPhone ; VSHookLocale aligne fuseau horaire + langue. Aucune API privee n'est
+# APPELEE pour nos donnees : on n'intercepte que ce qu'Instagram lit deja, et on ne
+# remplace un IOKit/MG que si l'appel d'origine renvoyait deja une valeur. IOKit
+# n'est pas lie : les symboles sont resolus via dlsym (fishhook lie par nom).
+VESSEL_PHASE5 = \
+	Source/Hooks/VSHookDevice.m \
+	Source/Hooks/VSHookLocale.m
+
+Vessel_FILES = $(VESSEL_PHASE1) $(VESSEL_PHASE2) $(VESSEL_PHASE3) $(VESSEL_PHASE4) $(VESSEL_PHASE5)
 
 Vessel_CFLAGS = -fobjc-arc \
 	-I$(THEOS_PROJECT_DIR)/Source \

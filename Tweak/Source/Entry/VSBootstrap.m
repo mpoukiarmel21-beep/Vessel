@@ -27,6 +27,8 @@
 #import "Hooks/VSHookKeychain.h"
 #import "Hooks/VSHookDefaults.h"
 #import "Hooks/VSHookCookies.h"
+#import "Hooks/VSHookDevice.h"
+#import "Hooks/VSHookLocale.h"
 
 /// Set when the crash streak trips the breaker. Modules must consult this and
 /// no-op rather than install anything.
@@ -114,6 +116,23 @@ static void VSBootstrapMain(void) {
                               : (home ? @"cookies install refused" : @"skipped (HOME refused)"))];
         if (home && !cook)
             VSLogE(@"boot", @"layer 4 (cookies) did not install — web sessions may leak between containers");
+
+        // Layer 5 (identity): make the active container look like a different
+        // iPhone. Gated on HOME like the isolation layers — if we are running
+        // unmodified (no container isolation), there is no per-container identity
+        // to project, and spoofing a lone real account's device would be pointless
+        // and inconsistent. Device first (fingerprint sources), then locale.
+        BOOL dev = home ? [VSHookDevice installWithIdentity:active.identity] : NO;
+        [log breadcrumb:VSBootStepDeviceHooked
+                   note:(dev ? @"device identity spoofed"
+                              : (home ? @"device install refused" : @"skipped (HOME refused)"))];
+        if (home && !dev)
+            VSLogE(@"boot", @"layer 5 (device) did not install — model/IDFV/serial are the real device's");
+
+        BOOL loc = home ? [VSHookLocale installWithIdentity:active.identity] : NO;
+        [log breadcrumb:VSBootStepLocaleHooked
+                   note:(loc ? @"locale/timezone aligned"
+                              : (home ? @"locale install refused" : @"skipped (HOME refused)"))];
     } else {
         [log breadcrumb:VSBootStepHomeHooked note:@"skipped (safe mode)"];
     }
