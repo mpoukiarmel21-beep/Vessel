@@ -108,11 +108,17 @@ jobs:
             echo "::error::dylib is not arm64"; exit 1
           fi
 
-          # GATE 3 — no reference to a jailbreak-only path.
-          if otool -L "$DYLIB" | grep -qE '/Library/(Frameworks|MobileSubstrate)'; then
+          # GATE 3 — no reference to a jailbreak-only path. Anchored on the
+          # first field of each otool line: an unanchored /Library/Frameworks
+          # also matches the legitimate /System/Library/Frameworks/… entries.
+          if otool -L "$DYLIB" | awk '{print $1}' \
+               | grep -qE '^/Library/(Frameworks|MobileSubstrate)'; then
             echo "::error::dylib references a jailbreak-only path"; exit 1
           fi
           echo "OK: substrate-free arm64 dylib, no jailbreak paths"
+
+          # Informational: the install name Sideloadly/insert_dylib will see.
+          echo "install name: $(otool -D "$DYLIB" | tail -1)"
 
       - name: Upload dylib artifact
         uses: actions/upload-artifact@v4
