@@ -78,6 +78,12 @@ static NSString *const kFracKey = @"btnFrac";   // vertical position, 0..1
         UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc]
             initWithTarget:self action:@selector(handleTap:)];
         [self addGestureRecognizer:tap];
+        // Hold-in-place opens the quick switcher. The default 0.5 s / 10 pt slop
+        // means a drag (which moves further) still falls through to the pan, and a
+        // quick tap still falls through to the tap — the three never collide.
+        UILongPressGestureRecognizer *hold = [[UILongPressGestureRecognizer alloc]
+            initWithTarget:self action:@selector(handleLongPress:)];
+        [self addGestureRecognizer:hold];
 
         [self refresh];
         [self wake];
@@ -141,6 +147,13 @@ static NSString *const kFracKey = @"btnFrac";   // vertical position, 0..1
     [self wake];
     [VSTheme hapticTap];
     if (self.onTap) self.onTap();
+}
+
+- (void)handleLongPress:(UILongPressGestureRecognizer *)g {
+    if (g.state != UIGestureRecognizerStateBegan) return;   // fire once, on catch
+    [self wake];
+    [VSTheme hapticSnap];
+    if (self.onLongPress) self.onLongPress();
 }
 
 - (void)handlePan:(UIPanGestureRecognizer *)g {

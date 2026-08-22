@@ -4,6 +4,7 @@
 #import "VSOverlayWindow.h"
 #import "VSFloatingButton.h"
 #import "VSPanelVC.h"
+#import "VSQuickSwitchVC.h"
 #import "VSTheme.h"
 #import "../Core/VSManager.h"
 #import "../Core/VSLog.h"
@@ -12,6 +13,7 @@
 @interface VSUIController ()
 @property (nonatomic, strong) VSOverlayWindow *window;
 @property (nonatomic, strong) VSFloatingButton *button;
+- (void)presentQuickSwitch;   // defined below; declared so the attach block can see it
 @end
 
 @implementation VSUIController
@@ -39,11 +41,27 @@
         [NSNotificationCenter.defaultCenter addObserver:c
             selector:@selector(sceneDidDisconnect:)
                 name:UISceneDidDisconnectNotification object:nil];
-        [c attachIfPossible];   // in case a scene is already active
+        [c ensureAttachedWithRetries:12];   // scene may already be active; self-heals a missed activation
     });
 }
 
 - (void)sceneBecameActive:(NSNotification *)n { [self attachIfPossible]; }
+
+// Belt-and-braces for the cold-boot race. On a heavy boot — notably the first
+// launch right after "Tout réinitialiser" — scheduleAttach's main-queue block can
+// run just AFTER the scene already posted its activation notification, so a single
+// attachIfPossible finds no ForegroundActive scene yet and the button never
+// appears until the user backgrounds and re-foregrounds. Retry a bounded number of
+// times (≈6 s) until the overlay is healthy on a live scene, then stop. The scene
+// observers remain the long-term safety net; this only covers the first seconds.
+- (void)ensureAttachedWithRetries:(NSInteger)tries {
+    [self attachIfPossible];
+    UIWindowScene *ws = [VSUIController activeScene];
+    if (ws && [self overlayHealthyOnScene:ws]) return;   // attached — done
+    if (tries <= 0) return;                               // give up; an activation notif can still fire later
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{ [self ensureAttachedWithRetries:tries - 1]; });
+}
 
 - (void)sceneDidDisconnect:(NSNotification *)n {
     if ([n.object isKindOfClass:UIWindowScene.class] &&
@@ -107,6 +125,7 @@
     VSFloatingButton *btn = [VSFloatingButton new];
     __weak VSUIController *weakSelf = self;
     btn.onTap = ^{ [weakSelf presentPanel]; };
+    btn.onLongPress = ^{ [weakSelf presentQuickSwitch]; };
     [root.view addSubview:btn];
 
     self.window = w;
@@ -156,6 +175,9 @@
     UINavigationController *nav = [[UINavigationController alloc]
                                    initWithRootViewController:panel];
     nav.modalPresentationStyle = UIModalPresentationPageSheet;
+    // Force the whole stack dark so pushed VCs (create, diagnostics, map) match the
+    // frosted-dark pane instead of flipping with Instagram's appearance.
+    nav.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
     UISheetPresentationController *sheet = nav.sheetPresentationController;
     sheet.detents = @[ UISheetPresentationControllerDetent.largeDetent ];
     sheet.prefersGrabberVisible = YES;
@@ -168,6 +190,31 @@
     panel.onDismiss = ^{ weakSelf.button.hidden = NO; [weakSelf.button refresh]; };
 
     [top presentViewController:nav animated:YES completion:nil];
+}
+
+// Long-press shortcut: a compact medium-detent carousel of containers. With a
+// single container there is nothing to switch between, so fall through to the full
+// panel (where the user can create a second one). Presented WITHOUT a nav
+// controller — it is a one-screen sheet, not a stack.
+- (void)presentQuickSwitch {
+    UIViewController *top = [VSUIController topViewController];
+    if (!top) { VSLogW(@"ui", @"no top VC — cannot present quick switch"); return; }
+    if (top.presentedViewController) return;   // don't stack over an open sheet
+    if (VSManager.shared.containers.count <= 1) { [self presentPanel]; return; }
+
+    VSQuickSwitchVC *qs = [VSQuickSwitchVC new];
+    qs.modalPresentationStyle = UIModalPresentationPageSheet;
+    qs.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
+    UISheetPresentationController *sheet = qs.sheetPresentationController;
+    sheet.detents = @[ UISheetPresentationControllerDetent.mediumDetent ];
+    sheet.prefersGrabberVisible = YES;
+    sheet.preferredCornerRadius = [VSTheme panelCornerRadius];
+
+    self.button.hidden = YES;
+    __weak VSUIController *weakSelf = self;
+    qs.onDismiss = ^{ weakSelf.button.hidden = NO; [weakSelf.button refresh]; };
+
+    [top presentViewController:qs animated:YES completion:nil];
 }
 
 #pragma mark - Relaunch

@@ -75,6 +75,7 @@ static NSString *const kSchemaNow  = @"1";
     }
     [_state flushNow];
     [_list flushNow];
+    [self sweepTrashAsync];   // finish purging anything a reset moved aside
     VSLogI(@"manager", @"boot #%ld — active=%@ (%@), %lu container(s)",
            (long)_bootCount, _active.name, _active.cid,
            (unsigned long)_containers.count);
@@ -84,17 +85,31 @@ static NSString *const kSchemaNow  = @"1";
 - (void)consumePendingResetIfNeeded {
     if (![[_state objectForKey:kResetKey] boolValue]) return;
 
-    VSLogW(@"manager", @"pending FULL RESET — wiping all container storage at boot");
+    VSLogW(@"manager", @"pending FULL RESET — clearing all container storage at boot");
     NSFileManager *fm = NSFileManager.defaultManager;
 
-    // Both roots sit under vesselRoot, outside the diagnostics dir. Removing them
-    // clears every container tree and every private store (cookies/defaults) in
-    // one sweep. Nothing here is live yet: HOME has not been redirected.
+    // The old code recursively DELETED containersRoot right here — on the main
+    // thread, inside the dylib constructor, before the run loop even starts. That
+    // tree holds Instagram's whole cache (often hundreds of MB), so the unlink
+    // could run for many seconds and trip iOS's launch watchdog, killing the app
+    // mid-wipe with the reset flag STILL set. The next launch re-wiped and was
+    // killed again, and the overlay never got a clean boot to attach to — that is
+    // exactly why "le menu disparaît" after Tout réinitialiser. Fix: MOVE each
+    // tree aside (an atomic rename is O(1) whatever the size), then purge the moved
+    // copies on a background queue. Boot stays instant; the flag is cleared now.
+    NSString *trash = [[VSPaths vesselRoot] stringByAppendingPathComponent:@".trash"];
+    [fm createDirectoryAtPath:trash withIntermediateDirectories:YES attributes:nil error:NULL];
     for (NSString *root in @[ [VSPaths containersRoot], [VSPaths privateRoot] ]) {
+        if (!root.length || ![fm fileExistsAtPath:root]) continue;
+        NSString *dst = [trash stringByAppendingPathComponent:
+                         [NSString stringWithFormat:@"%@-%@",
+                          root.lastPathComponent, NSUUID.UUID.UUIDString]];
         NSError *fe = nil;
-        if (root.length && [fm fileExistsAtPath:root] &&
-            ![fm removeItemAtPath:root error:&fe])
-            VSLogE(@"manager", @"reset: %@: %@", root, fe.localizedDescription);
+        if (![fm moveItemAtPath:root toPath:dst error:&fe]) {
+            VSLogE(@"manager", @"reset: move %@ aside failed (%@) — removing in place",
+                   root, fe.localizedDescription);
+            [fm removeItemAtPath:root error:NULL];      // fallback: correctness > boot speed
+        }
     }
 
     // Drop the list and the selection, and clear the flag so this runs exactly
@@ -106,7 +121,21 @@ static NSString *const kSchemaNow  = @"1";
     [_state removeObjectForKey:kResetKey];
     [_list flushNow];
     [_state flushNow];
-    VSLogI(@"manager", @"reset consumed — starting from a clean slate");
+    VSLogI(@"manager", @"reset consumed — clean slate (old data purging in background)");
+}
+
+/// Deletes <vesselRoot>/.trash on a background queue. Called once per boot: it
+/// finishes purging trees a reset moved aside (and anything a previous launch was
+/// killed before deleting). Everything under .trash is already detached from live
+/// state, so a crash mid-delete only leaves more to sweep next time — never loss.
+- (void)sweepTrashAsync {
+    NSString *trash = [[VSPaths vesselRoot] stringByAppendingPathComponent:@".trash"];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        NSFileManager *fm = NSFileManager.defaultManager;
+        if (![fm fileExistsAtPath:trash]) return;
+        for (NSString *e in [fm contentsOfDirectoryAtPath:trash error:NULL])
+            [fm removeItemAtPath:[trash stringByAppendingPathComponent:e] error:NULL];
+    });
 }
 
 - (void)loadList {

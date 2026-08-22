@@ -14,6 +14,11 @@
 /// Invoked on a tap (not a drag). The coordinator presents the main panel.
 @property (nonatomic, copy) void (^onTap)(void);
 
+/// Invoked on a long press (hold in place). The coordinator presents the quick
+/// account switcher ("Bascule rapide"). A drag still moves the button, and a plain
+/// tap still opens the full panel — the three gestures do not collide.
+@property (nonatomic, copy) void (^onLongPress)(void);
+
 /// Re-read the active container (accent, initial) and the container count (badge).
 /// Safe to call from the container-changed notification.
 - (void)refresh;

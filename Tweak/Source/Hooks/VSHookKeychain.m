@@ -119,6 +119,21 @@ static void VSStripInPlace(CFTypeRef *result) {
 
 #pragma mark - Broad queries (no identity attribute named)
 
+/// Mirror the caller's kSecAttrSynchronizable intent into a derived query, instead
+/// of forcing kSecAttrSynchronizableAny. Forcing "Any" escalated EVERY broad query
+/// onto the iCloud-Keychain (synchronizable) path: during account signup the
+/// syncing keybag is itself mid-write, and a match over synchronizable items can
+/// then block in securityd for a long time — on a background thread the main-thread
+/// watchdog never sees. That is the freeze at Instagram's "nom complet" step.
+/// Mirroring keeps our reads/writes on exactly the store the un-hooked app intended,
+/// so isolation stays faithful with no stall the app never asked for. A nil intent
+/// means the caller named none — Apple's default, i.e. local (non-synchronizable).
+static void VSMirrorSyncIntent(NSMutableDictionary *dst, NSDictionary *caller) {
+    id sync = caller[(__bridge id)kSecAttrSynchronizable];
+    if (sync) dst[(__bridge id)kSecAttrSynchronizable] = sync;
+    else      [dst removeObjectForKey:(__bridge id)kSecAttrSynchronizable];
+}
+
 /// A query that names no identity attribute cannot be scoped by prefixing — left
 /// alone it would touch every container's rows. We enumerate all rows the query
 /// matches, keep only the ones carrying our namespace, and hand back their
@@ -131,11 +146,7 @@ static NSArray *VSMatchingPersistentRefs(NSDictionary *query) {
     e[(__bridge id)kSecReturnAttributes]    = @YES;
     e[(__bridge id)kSecReturnPersistentRef] = @YES;
     e[(__bridge id)kSecMatchLimit]          = (__bridge id)kSecMatchLimitAll;
-    // A match-all query defaults to non-synchronizable rows only. Instagram can
-    // store a synchronizable (iCloud Keychain) session row; without this it would
-    // be invisible to enumeration, so it could neither be scoped nor cleared and
-    // would bleed across containers. "Any" covers both local and synchronizable.
-    e[(__bridge id)kSecAttrSynchronizable]  = (__bridge id)kSecAttrSynchronizableAny;
+    VSMirrorSyncIntent(e, query);   // mirror the caller — never force Any (see helper)
 
     CFTypeRef out = NULL;
     OSStatus st = orig_SecItemCopyMatching((__bridge CFDictionaryRef)e, &out);
@@ -160,9 +171,7 @@ static OSStatus VSFetchOne(NSData *ref, NSDictionary *callerQuery, CFTypeRef *ou
     NSMutableDictionary *q = [callerQuery mutableCopy];
     q[(__bridge id)kSecMatchLimit] = (__bridge id)kSecMatchLimitOne;
     q[(__bridge id)kSecValuePersistentRef] = ref;
-    // The ref may name a synchronizable row (see VSMatchingPersistentRefs); the
-    // caller's query might not have opted into those, so make sure it can be read.
-    q[(__bridge id)kSecAttrSynchronizable] = (__bridge id)kSecAttrSynchronizableAny;
+    VSMirrorSyncIntent(q, callerQuery);   // same intent used to enumerate the ref
     return orig_SecItemCopyMatching((__bridge CFDictionaryRef)q, out);
 }
 
@@ -200,10 +209,10 @@ static OSStatus VSBroadDelete(NSDictionary *query) {
     if (refs.count == 0) return errSecItemNotFound;
     OSStatus last = errSecSuccess;
     for (NSData *ref in refs) {
-        OSStatus st = orig_SecItemDelete((__bridge CFDictionaryRef)
-                        @{ (__bridge id)kSecValuePersistentRef: ref,
-                           (__bridge id)kSecAttrSynchronizable:
-                               (__bridge id)kSecAttrSynchronizableAny });
+        NSMutableDictionary *one =
+            [@{ (__bridge id)kSecValuePersistentRef: ref } mutableCopy];
+        VSMirrorSyncIntent(one, query);
+        OSStatus st = orig_SecItemDelete((__bridge CFDictionaryRef)one);
         if (st != errSecSuccess && st != errSecItemNotFound) last = st;
     }
     return last;
@@ -214,10 +223,10 @@ static OSStatus VSBroadUpdate(NSDictionary *query, NSDictionary *prefixedUpdate)
     if (refs.count == 0) return errSecItemNotFound;
     OSStatus last = errSecSuccess;
     for (NSData *ref in refs) {
-        OSStatus st = orig_SecItemUpdate((__bridge CFDictionaryRef)
-                        @{ (__bridge id)kSecValuePersistentRef: ref,
-                           (__bridge id)kSecAttrSynchronizable:
-                               (__bridge id)kSecAttrSynchronizableAny },
+        NSMutableDictionary *one =
+            [@{ (__bridge id)kSecValuePersistentRef: ref } mutableCopy];
+        VSMirrorSyncIntent(one, query);
+        OSStatus st = orig_SecItemUpdate((__bridge CFDictionaryRef)one,
                                          (__bridge CFDictionaryRef)prefixedUpdate);
         if (st != errSecSuccess && st != errSecItemNotFound) last = st;
     }

@@ -31,6 +31,31 @@
 + (UIColor *)secondaryText     { return UIColor.secondaryLabelColor; }
 + (UIColor *)separator         { return UIColor.separatorColor; }
 
+#pragma mark - Dark-glass surfaces
+
++ (UIColor *)glassFill         { return [UIColor colorWithWhite:1.0 alpha:0.10]; }
++ (UIColor *)glassFillStrong   { return [UIColor colorWithWhite:1.0 alpha:0.15]; }
++ (UIColor *)glassStroke       { return [UIColor colorWithWhite:1.0 alpha:0.16]; }
++ (UIColor *)onGlassPrimary    { return [UIColor colorWithWhite:1.0 alpha:0.96]; }
++ (UIColor *)onGlassSecondary  { return [UIColor colorWithWhite:1.0 alpha:0.58]; }
+
+#pragma mark - Signature gradient
+
++ (UIColor *)accentGradientStart { return [self colorFromHex:@"#5E7BFF"]; } // periwinkle indigo
++ (UIColor *)accentGradientEnd   { return [self colorFromHex:@"#B45CFF"]; } // violet
+
++ (NSArray *)accentGradientCGColors {
+    return @[ (id)self.accentGradientStart.CGColor, (id)self.accentGradientEnd.CGColor ];
+}
+
++ (CAGradientLayer *)accentGradientLayer {
+    CAGradientLayer *g = [CAGradientLayer layer];
+    g.colors = [self accentGradientCGColors];
+    g.startPoint = CGPointMake(0.0, 0.0);
+    g.endPoint   = CGPointMake(1.0, 1.0);
+    return g;
+}
+
 + (UIColor *)colorFromHex:(NSString *)hex {
     NSString *s = [[hex ?: @"" stringByTrimmingCharactersInSet:
                     NSCharacterSet.whitespaceAndNewlineCharacterSet] uppercaseString];
@@ -94,6 +119,7 @@
 #pragma mark - Effects
 
 + (UIBlurEffect *)panelBlur  { return [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThickMaterial]; }
++ (UIBlurEffect *)panelBlurDark { return [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThickMaterialDark]; }
 + (UIBlurEffect *)buttonBlur { return [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemChromeMaterial]; }
 
 #pragma mark - Haptics

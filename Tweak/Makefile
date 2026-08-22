@@ -77,7 +77,9 @@ VESSEL_PHASE6 = \
 # active et presente le panneau depuis le VC du sommet d'Instagram ; VSPanelVC est le
 # panneau principal (liste des containers, creer, diagnostics, tout reinitialiser) ;
 # VSCreateVC l'assistant de creation ; VSMapPickerVC le choix de localisation ;
-# VSDiagnosticsVC le retour terrain (journaux, auto-test, sink distant opt-in).
+# VSDiagnosticsVC le retour terrain (journaux, auto-test, sink distant opt-in) ;
+# VSQuickSwitchVC la « bascule rapide » (appui long sur le bouton -> carrousel des
+# containers, bascule + redemarrage sans ouvrir le panneau complet).
 # UIKit et MapKit sont deja lies (cf. libmedia_support_FRAMEWORKS).
 VESSEL_PHASE7 = \
 	Source/UI/VSTheme.m \
@@ -85,6 +87,7 @@ VESSEL_PHASE7 = \
 	Source/UI/VSFloatingButton.m \
 	Source/UI/VSUIController.m \
 	Source/UI/VSPanelVC.m \
+	Source/UI/VSQuickSwitchVC.m \
 	Source/UI/VSCreateVC.m \
 	Source/UI/VSMapPickerVC.m \
 	Source/UI/VSDiagnosticsVC.m
