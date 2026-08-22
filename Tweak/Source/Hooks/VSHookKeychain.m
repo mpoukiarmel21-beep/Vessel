@@ -201,6 +201,10 @@ static OSStatus   gLastRefusal = 0;
 static NSUInteger gRefusalLogged = 0;
 static const NSUInteger kMaxRefusalLines = 8;
 
+static NSUInteger gAGNeutralized  = 0;   // foreign-access-group READS turned -34018 -> notFound
+static NSUInteger gAGNeutrLogged  = 0;
+static const NSUInteger kMaxAGLines = 8;
+
 /// Counts what securityd refused, so "the shared credential store is unreachable"
 /// becomes a number on the Diagnostics screen instead of a hypothesis. OSStatus
 /// codes only — never an attribute value, never an item.
@@ -214,6 +218,43 @@ static void VSNoteRefusal(OSStatus st) {
     }
     if (log) VSLogI(@"keychain", @"keys: securityd refused a broad query (%d) — "
                     @"passed through unchanged", (int)st);
+}
+
+/// True when a query explicitly names a keychain access group. On a re-signed
+/// sideload every such group is Meta's own (group.com.facebook.family,
+/// MH9GU9K5PX.shared, …): the app carries the team prefix, we do not, so any group
+/// it names is one we cannot own. We don't need to parse the value — a -34018 on a
+/// query that named a group IS the proof it is unreachable.
+static BOOL VSNamesAccessGroup(NSDictionary *q) {
+    return [q isKindOfClass:NSDictionary.class] &&
+           q[(__bridge id)kSecAttrAccessGroup] != nil;
+}
+
+/// The signup "nom complet" fix. A READ that named a foreign access group is
+/// FXAccessLibrary / IGAuthHeaderStore asking Meta's cross-app credential store for
+/// cached username suggestions or an auth header. securityd answers -34018 ("you have
+/// no right"). Two truths fit that situation: "no right" and "there is nothing here"
+/// (errSecItemNotFound) — and for a READ the second is the more useful, equally honest
+/// one, because the store genuinely is empty from our side and the app's own
+/// missingAccessGroup path treats not-found as "skip the access library, fetch via the
+/// network" whereas -34018 is an exceptional error far fewer code paths handle. That
+/// substitution is what lets the name step drop to /accounts/username_suggestions/
+/// instead of its Next doing nothing.
+///
+/// Scope is deliberately narrow: READS only. A WRITE or DELETE to an unreachable group
+/// keeps its real -34018 — pretending a write to a store we cannot reach succeeded would
+/// be the lie that hides a real failure. Counted and logged (codes/counts only).
+static OSStatus VSNormalizeGroupRead(NSDictionary *query, OSStatus st, CFTypeRef *result) {
+    if (st != errSecMissingEntitlement || !VSNamesAccessGroup(query)) return st;
+    if (result && *result) { CFRelease(*result); *result = NULL; }
+    BOOL log = NO;
+    @synchronized (VSKcLock()) {
+        gAGNeutralized++;
+        if (gAGNeutrLogged < kMaxAGLines) { gAGNeutrLogged++; log = YES; }
+    }
+    if (log) VSLogI(@"keychain", @"keys: foreign access-group read unreachable (-34018) "
+                    @"-> reported empty so the app falls back to the network");
+    return errSecItemNotFound;
 }
 
 /// Turning "securityd refused this query" into "there is no such item" is a lie a
@@ -331,12 +372,13 @@ static OSStatus vs_SecItemCopyMatching(CFDictionaryRef query, CFTypeRef *result)
             OSStatus st = orig_SecItemCopyMatching((__bridge CFDictionaryRef)q, result);
             VSMark("keychain:copy.done");
             if (st == errSecSuccess) VSStripInPlace(result);
+            else st = VSNormalizeGroupRead((__bridge NSDictionary *)query, st, result);
             return st;
         }
         VSMark("keychain:broad-copy");   // N+1 securityd round-trips — prime hang suspect
         OSStatus st = VSBroadCopy((__bridge NSDictionary *)query, result);
         VSMark("keychain:broad-copy.done");
-        return st;
+        return VSNormalizeGroupRead((__bridge NSDictionary *)query, st, result);
     }
 }
 
@@ -525,11 +567,17 @@ static NSArray<NSString *> *VSDeclaredGroups(void) {
 }
 
 + (NSString *)refusalsDescription {
-    NSUInteger all, ent; OSStatus last;
-    @synchronized (VSKcLock()) { all = gRefusals; ent = gMissingEnt; last = gLastRefusal; }
-    if (all == 0) return @"0 refus de securityd";
-    return [NSString stringWithFormat:@"%lu refus dont %lu sans droit d'accès "
-            @"(-34018) — dernier code %d", (unsigned long)all, (unsigned long)ent, (int)last];
+    NSUInteger all, ent, ag; OSStatus last;
+    @synchronized (VSKcLock()) { all = gRefusals; ent = gMissingEnt; last = gLastRefusal; ag = gAGNeutralized; }
+    NSString *base;
+    if (all == 0) base = @"0 refus de securityd";
+    else base = [NSString stringWithFormat:@"%lu refus dont %lu sans droit d'accès "
+                 @"(-34018) — dernier code %d", (unsigned long)all, (unsigned long)ent, (int)last];
+    if (ag == 0) return base;
+    // The number that matters for the signup step: how many access-library reads we
+    // turned into a clean "empty" so the app would fall back to the network.
+    return [base stringByAppendingFormat:@" | %lu lecture(s) trousseau partagé rendue(s) "
+            @"« vide » (repli réseau)", (unsigned long)ag];
 }
 
 @end
