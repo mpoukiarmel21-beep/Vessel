@@ -51,4 +51,20 @@
 /// cleans up after itself.
 + (NSString *)firstLeak;
 
+/// Whether the shared keychain access groups the base IPA declares in its own
+/// entitlements (MH9GU9K5PX.platformFamily / MH9GU9K5PX.shared — read out of its code
+/// signature) can be reached at all under the current signature. Instagram 443 shares
+/// credentials with the other Meta apps through them (FXAccessLibrary,
+/// IGAuthHeaderStore::SaveAuthHeaderInAccessLibrary), and the signup "nom complet"
+/// step is gated on that store by ig_ios_access_library_fetch_suggested_usernames_
+/// name_reg_step. Because the groups carry Instagram's team prefix, a re-signature by
+/// any other team loses them — this turns that expectation into a measured status code
+/// on the device instead of an argument. Read-only; reports OSStatus codes only.
++ (NSString *)accessGroupsDescription;
+
+/// How many broad queries securityd refused outright, and how many of those for a
+/// missing entitlement. Non-zero means the app is asking for a store it cannot have —
+/// which it is now told verbatim rather than being answered "empty".
++ (NSString *)refusalsDescription;
+
 @end

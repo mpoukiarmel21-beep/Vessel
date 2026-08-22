@@ -278,6 +278,14 @@ static void VSTestIsolation(void) {
     if (!VSSkipped(VSLayerKeychain, "isolation/layer2-keychain")) {
         NSString *l2 = [VSHookKeychain firstLeak];
         VSCheck(l2 == nil, @"isolation/layer2-keychain", l2);
+        // Not a pass/fail: on a re-signed sideload these groups are EXPECTED to be
+        // out of reach (they carry Instagram's team prefix). It is recorded because
+        // it is the one fact that tells apart "Vessel broke the signup step" from
+        // "no sideload can reach the store that step asks for".
+        VSNote([@"env/shared-keychain-groups: " stringByAppendingString:
+                [VSHookKeychain accessGroupsDescription]]);
+        VSNote([@"env/securityd-refusals: " stringByAppendingString:
+                [VSHookKeychain refusalsDescription]]);
     }
 
     if (!VSSkipped(VSLayerDefaults, "isolation/layer3-defaults")) {

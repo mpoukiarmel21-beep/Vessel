@@ -7,6 +7,7 @@
 #import "../Core/VSSelfTest.h"
 #import "../Hooks/VSHookNetwork.h"
 #import "../Hooks/VSHookCookies.h"
+#import "../Hooks/VSHookKeychain.h"
 
 @interface VSDiagnosticsVC ()
 @property (nonatomic, strong) UIStackView *stack;
@@ -278,10 +279,13 @@
     // named here, live. Empty means the app is not waiting on the network at all.
     self.statusLabel.text = [NSString stringWithFormat:
         @"Lancements : %ld\nÉchecs consécutifs : %ld\nConteneur actif : %@\n"
-        @"Requêtes en attente : %@\nCookies lus par l'app : %@",
+        @"Requêtes en attente : %@\nCookies lus par l'app : %@\n"
+        @"Trousseau partagé Meta : %@\nRefus securityd : %@",
         (long)m.bootCount, (long)[log crashStreak], m.active.name ?: @"—",
         [VSHookNetwork pendingDescription],
-        [VSHookCookies readStatsDescription]];
+        [VSHookCookies readStatsDescription],
+        [VSHookKeychain accessGroupsDescription],
+        [VSHookKeychain refusalsDescription]];
 
     NSString *report = [VSSelfTest lastReport];
     self.selfTestLabel.text = report.length ? report : @"Aucun rapport pour l'instant.";

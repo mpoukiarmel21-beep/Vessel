@@ -14,3 +14,7 @@ Input.ipa
 .DS_Store
 Thumbs.db
 _ipaprobe/
+
+# Local IPA teardown workspace: hundreds of MB of extracted Instagram
+# binaries, useful on this machine only and never an input to CI.
+.analysis/

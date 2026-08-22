@@ -139,7 +139,11 @@ static void VSMirrorSyncIntent(NSMutableDictionary *dst, NSDictionary *caller) {
 /// matches, keep only the ones carrying our namespace, and hand back their
 /// persistent refs; the broad paths below then address those rows one at a time,
 /// so another container's rows are never read, updated, or deleted.
-static NSArray *VSMatchingPersistentRefs(NSDictionary *query) {
+///
+/// *outStatus carries securityd's verdict on the enumeration itself, which the
+/// callers need in order NOT to invent one. See VSBroadStatus.
+static NSArray *VSMatchingPersistentRefs(NSDictionary *query, OSStatus *outStatus) {
+    if (outStatus) *outStatus = errSecSuccess;
     NSMutableDictionary *e = [query mutableCopy];
     [e removeObjectForKey:(__bridge id)kSecReturnData];
     [e removeObjectForKey:(__bridge id)kSecReturnRef];
@@ -151,6 +155,7 @@ static NSArray *VSMatchingPersistentRefs(NSDictionary *query) {
     CFTypeRef out = NULL;
     OSStatus st = orig_SecItemCopyMatching((__bridge CFDictionaryRef)e, &out);
     NSArray *items = (__bridge_transfer NSArray *)out;
+    if (outStatus) *outStatus = st;
     if (st != errSecSuccess || ![items isKindOfClass:NSArray.class]) return @[];
 
     NSMutableArray *refs = [NSMutableArray array];
@@ -175,13 +180,76 @@ static OSStatus VSFetchOne(NSData *ref, NSDictionary *callerQuery, CFTypeRef *ou
     return orig_SecItemCopyMatching((__bridge CFDictionaryRef)q, out);
 }
 
+#pragma mark - Refusal observation (log-only, codes only)
+
+// Present in every current SDK, defined defensively so an older one still builds:
+// -34018 is the code securityd returns when the caller's signature does not carry
+// the keychain access group named by the query.
+#ifndef errSecMissingEntitlement
+#define errSecMissingEntitlement ((OSStatus)-34018)
+#endif
+
+static id VSKcLock(void) {
+    static id o; static dispatch_once_t once;
+    dispatch_once(&once, ^{ o = [NSObject new]; });
+    return o;
+}
+
+static NSUInteger gRefusals    = 0;   // broad queries securityd refused outright
+static NSUInteger gMissingEnt  = 0;   // ...of which errSecMissingEntitlement (-34018)
+static OSStatus   gLastRefusal = 0;
+static NSUInteger gRefusalLogged = 0;
+static const NSUInteger kMaxRefusalLines = 8;
+
+/// Counts what securityd refused, so "the shared credential store is unreachable"
+/// becomes a number on the Diagnostics screen instead of a hypothesis. OSStatus
+/// codes only — never an attribute value, never an item.
+static void VSNoteRefusal(OSStatus st) {
+    BOOL log = NO;
+    @synchronized (VSKcLock()) {
+        gRefusals++;
+        if (st == errSecMissingEntitlement) gMissingEnt++;
+        gLastRefusal = st;
+        if (gRefusalLogged < kMaxRefusalLines) { gRefusalLogged++; log = YES; }
+    }
+    if (log) VSLogI(@"keychain", @"keys: securityd refused a broad query (%d) — "
+                    @"passed through unchanged", (int)st);
+}
+
+/// Turning "securityd refused this query" into "there is no such item" is a lie a
+/// caller can hang on, and it is the one lie the broad paths used to tell. When a
+/// query names no identity attribute we answer it by enumerating rows first, so
+/// EVERY failure of that enumeration used to collapse into errSecItemNotFound.
+///
+/// This matters here, not in theory. Analysing the base IPA shows Instagram 443
+/// reaches Meta's cross-app credential store (FXAccessLibrary,
+/// IGAuthHeaderStore::SaveAuthHeaderInAccessLibrary) through shared keychain access
+/// groups, and the original entitlements declare exactly two —
+/// MH9GU9K5PX.platformFamily and MH9GU9K5PX.shared — under Instagram's own team
+/// prefix. A re-signed sideload is signed by ANOTHER team, so those groups cannot
+/// be carried over and securityd answers errSecMissingEntitlement (-34018) instead.
+/// The binary carries a `missingAccessGroup` path, i.e. the app knows how to give
+/// up when the store is unreachable; it has no reason to give up on "the store is
+/// reachable and simply empty", which is what -25300 says. Reporting the real code
+/// costs nothing and removes a whole class of silent wait.
+static OSStatus VSBroadStatus(OSStatus enumStatus) {
+    // No rows of ours matched. If the enumeration itself succeeded (or genuinely
+    // found nothing) that is a true "not found"; anything else is securityd's own
+    // verdict and belongs to the caller unmodified.
+    if (enumStatus == errSecSuccess || enumStatus == errSecItemNotFound)
+        return errSecItemNotFound;
+    VSNoteRefusal(enumStatus);
+    return enumStatus;
+}
+
 /// Match-all / single reads that named no identity attribute: fetch each of our
 /// own rows by its persistent ref, so another container's rows can never appear
 /// in the result. Each per-ref fetch returns the caller's exact shape, so the
 /// assembled array is byte-for-byte what a real match-all would have produced.
 static OSStatus VSBroadCopy(NSDictionary *query, CFTypeRef *result) {
-    NSArray *refs = VSMatchingPersistentRefs(query);
-    if (refs.count == 0) { if (result) *result = NULL; return errSecItemNotFound; }
+    OSStatus es = errSecSuccess;
+    NSArray *refs = VSMatchingPersistentRefs(query, &es);
+    if (refs.count == 0) { if (result) *result = NULL; return VSBroadStatus(es); }
 
     BOOL all = [query[(__bridge id)kSecMatchLimit] isEqual:(__bridge id)kSecMatchLimitAll];
     if (!all) {
@@ -205,8 +273,9 @@ static OSStatus VSBroadCopy(NSDictionary *query, CFTypeRef *result) {
 /// logout in one container cannot touch another's. errSecItemNotFound on an
 /// individual row is not an error — the aim was to clear it and it is gone.
 static OSStatus VSBroadDelete(NSDictionary *query) {
-    NSArray *refs = VSMatchingPersistentRefs(query);
-    if (refs.count == 0) return errSecItemNotFound;
+    OSStatus es = errSecSuccess;
+    NSArray *refs = VSMatchingPersistentRefs(query, &es);
+    if (refs.count == 0) return VSBroadStatus(es);
     OSStatus last = errSecSuccess;
     for (NSData *ref in refs) {
         NSMutableDictionary *one =
@@ -219,8 +288,9 @@ static OSStatus VSBroadDelete(NSDictionary *query) {
 }
 
 static OSStatus VSBroadUpdate(NSDictionary *query, NSDictionary *prefixedUpdate) {
-    NSArray *refs = VSMatchingPersistentRefs(query);
-    if (refs.count == 0) return errSecItemNotFound;
+    OSStatus es = errSecSuccess;
+    NSArray *refs = VSMatchingPersistentRefs(query, &es);
+    if (refs.count == 0) return VSBroadStatus(es);
     OSStatus last = errSecSuccess;
     for (NSData *ref in refs) {
         NSMutableDictionary *one =
@@ -411,6 +481,55 @@ static OSStatus vs_SecItemDelete(CFDictionaryRef query) {
     NSString *phys = [self physicalProofForService:service];
     SecItemDelete((__bridge CFDictionaryRef)del);   // cleanup regardless
     return phys;
+}
+
+#pragma mark - Shared-credential-store reachability
+
+/// The two keychain access groups the base IPA's own entitlements declare, read out
+/// of its code signature: <plist> keychain-access-groups = MH9GU9K5PX.platformFamily,
+/// MH9GU9K5PX.shared. They are prefixed with Instagram's team id, so no re-signature
+/// by another team can carry them; this is the surface FXAccessLibrary /
+/// IGAuthHeaderStore use to share credentials with the other Meta apps.
+static NSArray<NSString *> *VSDeclaredGroups(void) {
+    return @[ @"MH9GU9K5PX.platformFamily", @"MH9GU9K5PX.shared" ];
+}
+
+/// Asks securityd, for each declared group, "would you even look?" — a read with
+/// kSecMatchLimitOne that returns nothing. -34018 (errSecMissingEntitlement) means
+/// the group is out of reach for this signature; -25300 means reachable and empty.
+/// Uses the ORIGINAL SecItemCopyMatching so the answer describes the app's
+/// entitlements and not our own bookkeeping. Nothing is read, added or deleted, and
+/// only the status code is reported.
++ (NSString *)accessGroupsDescription {
+    // Falls back to the public symbol when the layer is not installed: the question
+    // is about the app's entitlements, and it is worth answering either way. Our own
+    // replacement never rewrites kSecAttrAccessGroup, so both routes agree.
+    OSStatus (*copy)(CFDictionaryRef, CFTypeRef *) = orig_SecItemCopyMatching;
+    if (!copy) copy = &SecItemCopyMatching;
+    NSMutableArray<NSString *> *out = [NSMutableArray array];
+    for (NSString *g in VSDeclaredGroups()) {
+        NSDictionary *q = @{ (__bridge id)kSecClass:          (__bridge id)kSecClassGenericPassword,
+                             (__bridge id)kSecAttrAccessGroup: g,
+                             (__bridge id)kSecMatchLimit:      (__bridge id)kSecMatchLimitOne };
+        CFTypeRef r = NULL;
+        OSStatus st = copy((__bridge CFDictionaryRef)q, &r);
+        if (r) CFRelease(r);
+        NSString *verdict;
+        if (st == errSecMissingEntitlement) verdict = @"HORS D'ATTEINTE (-34018)";
+        else if (st == errSecItemNotFound)  verdict = @"accessible, vide";
+        else if (st == errSecSuccess)       verdict = @"accessible, non vide";
+        else verdict = [NSString stringWithFormat:@"code %d", (int)st];
+        [out addObject:[NSString stringWithFormat:@"%@ : %@", g, verdict]];
+    }
+    return [out componentsJoinedByString:@" | "];
+}
+
++ (NSString *)refusalsDescription {
+    NSUInteger all, ent; OSStatus last;
+    @synchronized (VSKcLock()) { all = gRefusals; ent = gMissingEnt; last = gLastRefusal; }
+    if (all == 0) return @"0 refus de securityd";
+    return [NSString stringWithFormat:@"%lu refus dont %lu sans droit d'accès "
+            @"(-34018) — dernier code %d", (unsigned long)all, (unsigned long)ent, (int)last];
 }
 
 @end
