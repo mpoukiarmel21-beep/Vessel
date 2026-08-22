@@ -59,4 +59,12 @@
 /// Which side of the cookie state exists on disk, for the journal. Paths only.
 + (NSString *)storagePlacementDescription;
 
+/// How many times the app actually read this surface, and how many of those were for
+/// an instagram.com /api/ URL, plus the cookie NAMES handed over on the last one.
+/// Instagram 443's API runs on Tigon (a C++ stack, cookies added by
+/// IGCookieAddingInterceptor — verified in the base IPA), so whether it reads through
+/// NSHTTPCookieStorage at all is an open question this answers in one launch instead
+/// of one build. Counts and key names only; never a cookie value.
++ (NSString *)readStatsDescription;
+
 @end

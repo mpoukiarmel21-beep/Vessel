@@ -252,11 +252,59 @@ static void VSSyncFromReal(void) {
                (unsigned long)took.count, [took componentsJoinedByString:@", "]);
 }
 
+#pragma mark - Read-side observation (log-only, key NAMES only)
+
+/// Why this counter exists
+/// -----------------------
+/// Analysing the base IPA showed Instagram 443 does NOT put its API traffic on
+/// NSURLSession: it runs on Tigon (facebook::tigon), and the Cookie: header is added
+/// by a C++ interceptor — the strings IGCookieAddingInterceptor / TigonRequestInterceptor
+/// are in FBSharedFramework. That leaves one question the whole cookie hypothesis rests
+/// on, and no amount of reasoning can answer it: does that interceptor read cookies
+/// through NSHTTPCookieStorage (our surface), or from a store of its own?
+///
+/// So we count. If gReadForAPI stays at 0 through a signup attempt, layer 4 is not on
+/// Instagram's request path at all and the split-brain fix, correct as it is, cannot be
+/// what unblocks the step — that is a fact worth one launch instead of another build.
+/// Names only, never a value; a cookie name is a key name (VSRedact's `keys:` contract).
+static NSUInteger gReadCalls  = 0;      // -cookies / -cookiesForURL: total
+static NSUInteger gReadForAPI = 0;      // ...of which for an instagram.com /api/ URL
+static NSUInteger gReadLogged = 0;      // API reads actually written to the journal
+static NSString  *gLastAPIRead = nil;   // "path -> names" of the most recent one
+static const NSUInteger kMaxReadLines = 12;
+
+/// A read for an Instagram API URL is the interesting one; everything else (CDN
+/// images, web views) would bury it. Caller holds no lock.
+static void VSNoteRead(NSURL *url, NSArray<NSHTTPCookie *> *given) {
+    BOOL api = NO;
+    NSString *host = url.host.lowercaseString;
+    if ([host containsString:@"instagram.com"] && [url.path containsString:@"/api/"]) api = YES;
+
+    NSMutableArray<NSString *> *names = nil;
+    NSString *line = nil;
+    @synchronized (VSJarLock()) {
+        gReadCalls++;
+        if (!api) return;
+        gReadForAPI++;
+        names = [NSMutableArray arrayWithCapacity:given.count];
+        for (NSHTTPCookie *c in given) [names addObject:c.name ?: @"?"];
+        line = [NSString stringWithFormat:@"%@ -> %@", url.path,
+                names.count ? [names componentsJoinedByString:@", "] : @"(vide)"];
+        gLastAPIRead = line;
+        if (gReadLogged >= kMaxReadLines) line = nil;   // counted, not logged
+        else gReadLogged++;
+    }
+    if (line) VSLogI(@"cookies", @"keys: app read %@", line);
+}
+
 static NSArray *vs_cookies(id self_, SEL _cmd) {
     if (!gInstalled || self_ != gShared) return orig_cookies(self_, _cmd);
     VSSyncFromReal();
     NSArray *snapshot;
-    @synchronized (VSJarLock()) { snapshot = [VSLiveCookiesLocked() copy]; }
+    @synchronized (VSJarLock()) {
+        gReadCalls++;
+        snapshot = [VSLiveCookiesLocked() copy];
+    }
     return snapshot;
 }
 
@@ -279,6 +327,7 @@ static NSArray *vs_cookiesForURL(id self_, SEL _cmd, NSURL *url) {
     [match sortUsingComparator:^NSComparisonResult(NSHTTPCookie *a, NSHTTPCookie *b) {
         return [@(b.path.length) compare:@(a.path.length)];   // more specific paths first
     }];
+    VSNoteRead(url, match);
     return match;
 }
 
@@ -553,6 +602,20 @@ static BOOL VSSwizzle(Class cls, SEL sel, void *repl, void **outOrig) {
     return [NSString stringWithFormat:@"CF cookie file: container=%@ realHome=%@",
             [fm fileExistsAtPath:inContainer] ? @"present" : @"absent",
             [fm fileExistsAtPath:inRealHome]  ? @"PRESENT (shared!)" : @"absent"];
+}
+
+/// Whether Instagram asks the ObjC cookie surface at all — the one measurement that
+/// decides if layer 4 sits on its request path. The base IPA shows the API runs on
+/// Tigon with a C++ IGCookieAddingInterceptor, so "0 for /api/" is a real possible
+/// answer, and it would mean this layer cannot be what blocks (or unblocks) a step.
++ (NSString *)readStatsDescription {
+    NSUInteger all, api; NSString *last;
+    @synchronized (VSJarLock()) { all = gReadCalls; api = gReadForAPI; last = gLastAPIRead; }
+    if (api == 0)
+        return [NSString stringWithFormat:@"%lu lecture(s), 0 pour /api/ — "
+                @"Instagram ne passe pas par cette surface", (unsigned long)all];
+    return [NSString stringWithFormat:@"%lu lecture(s) dont %lu pour /api/ — dernière : %@",
+            (unsigned long)all, (unsigned long)api, last ?: @"—"];
 }
 
 @end

@@ -297,6 +297,11 @@ static void VSTestIsolation(void) {
         VSCheck(l4c == nil, @"isolation/layer4-cookies-cfnetwork", l4c);
         VSNote([@"isolation/layer4-cookies-cfnetwork: " stringByAppendingString:
                 [VSHookCookies storagePlacementDescription]]);
+        // Read at boot this is necessarily 0 — its value is on the Diagnostics screen
+        // AFTER the broken step has been retried. Present here so an exported report
+        // taken later carries it too.
+        VSNote([@"isolation/layer4-cookies-reads: " stringByAppendingString:
+                [VSHookCookies readStatsDescription]]);
     }
 
     // Layer 4b is allowed to be absent: on a pre-iOS 17 OS (or if WebKit is missing)
@@ -340,8 +345,10 @@ static void VSTestIsolation(void) {
     // The HTTP probe is instrumentation, never a requirement: it is reported so the
     // export says whether network activity was being journalled at all, and a "not
     // active" line explains an otherwise silent journal instead of leaving the next
-    // reader to wonder.
-    VSNote([NSString stringWithFormat:@"diag/http-probe: %@",
+    // reader to wonder. It covers NSURLSession only — Instagram 443's own API runs on
+    // Tigon (verified in the base IPA), so an empty net journal is not proof that the
+    // app made no request; the cookie read counter above is what covers that path.
+    VSNote([NSString stringWithFormat:@"diag/http-probe: %@ (NSURLSession seulement)",
             [VSHookNetwork isInstalled] ? @"active (méthode + chemin + code)"
                                         : @"not active — no network line will appear"]);
 }
