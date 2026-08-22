@@ -160,17 +160,27 @@ static const NSTimeInterval kCoalesce = 0.30;
 
 /// Runs on _io. NSDataWritingAtomic writes to a sibling temp file and atomically
 /// exchanges it with the target, so a crash mid-write can never leave a truncated
-/// primary. The previous primary is copied to .bak first, giving one generation of
-/// rollback if the new contents themselves turn out to be bad.
+/// primary. The previous primary is MOVED (not copied) to .bak first, giving one
+/// generation of rollback if the new contents themselves turn out to be bad. The
+/// move is O(1) whatever the file size; the old full-file copy here was O(size) on
+/// EVERY write, and under a signup write storm that copy cost was what let the _io
+/// backlog grow large enough to stall a synchronous flush waiting behind it. If the
+/// process dies in the sub-millisecond window between the rename and the atomic
+/// write, the primary is momentarily absent but .bak holds the last good copy, which
+/// -loadFromDisk already recovers from and re-promotes — same durability, far cheaper.
 - (BOOL)writeData:(NSData *)data toPath:(NSString *)path backup:(NSString *)bak {
     NSFileManager *fm = NSFileManager.defaultManager;
     if ([fm fileExistsAtPath:path]) {
         [fm removeItemAtPath:bak error:nil];
-        [fm copyItemAtPath:path toPath:bak error:nil];
+        [fm moveItemAtPath:path toPath:bak error:nil];
     }
     NSError *e = nil;
     if (![data writeToFile:path options:NSDataWritingAtomic error:&e]) {
         VSLogE(@"store", @"%@: atomic write failed: %@", _label, e.localizedDescription);
+        // The primary was just moved to .bak and the new write failed, so restore it
+        // rather than leave the store with no readable primary until the next write.
+        if (![fm fileExistsAtPath:path] && [fm fileExistsAtPath:bak])
+            [fm moveItemAtPath:bak toPath:path error:nil];
         return NO;
     }
     return YES;
@@ -219,17 +229,35 @@ static const NSTimeInterval kCoalesce = 0.30;
     if (_lifecycleAttached) return;
     _lifecycleAttached = YES;
     NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
-    NSArray *names = @[ UIApplicationDidEnterBackgroundNotification,
-                        UIApplicationWillTerminateNotification,
-                        UIApplicationWillResignActiveNotification,
-                        UIApplicationDidReceiveMemoryWarningNotification ];
-    for (NSNotificationName n in names) {
+
+    // Only these two are TERMINAL: the process is about to die, so an async write
+    // would never land — they must block until the bytes are down. They are also
+    // rare (once per app death), so a synchronous flush here costs nothing visible.
+    NSArray *terminal = @[ UIApplicationWillTerminateNotification,
+                           UIApplicationDidEnterBackgroundNotification ];
+    for (NSNotificationName n in terminal) {
         [nc addObserverForName:n object:nil queue:nil usingBlock:^(NSNotification *note) {
             if ([self flushNow]) {
                 VSLogD(@"store", @"%@ flushed on %@", self->_label, note.name);
             } else {
                 VSLogE(@"store", @"%@ FLUSH FAILED on %@", self->_label, note.name);
             }
+        }];
+    }
+
+    // These two are TRANSIENT and, during signup, arrive in storms: the keyboard,
+    // the photo picker and a system prompt each resign-active, and image work fires
+    // memory warnings. The app keeps running afterwards, so a synchronous flushNow
+    // here bought no durability the 300 ms coalesced write does not already give —
+    // it only put four back-to-back dispatch_sync(_io) disk writes on the MAIN
+    // thread per event, which under a storm wedged it behind the whole I/O backlog
+    // (the ~30 s "nom complet" freeze). flushAsync captures the same bytes without
+    // ever blocking the main thread.
+    NSArray *transient = @[ UIApplicationWillResignActiveNotification,
+                            UIApplicationDidReceiveMemoryWarningNotification ];
+    for (NSNotificationName n in transient) {
+        [nc addObserverForName:n object:nil queue:nil usingBlock:^(NSNotification *note) {
+            [self flushAsync];
         }];
     }
 }
