@@ -33,6 +33,7 @@
 #import "Hooks/VSHookLocation.h"
 #import "Hooks/VSHookLocale.h"
 #import "Hooks/VSHookImage.h"
+#import "Hooks/VSHookNetwork.h"
 #import "UI/VSUIController.h"
 
 /// Set when the crash streak trips the breaker. Modules must consult this and
@@ -112,36 +113,56 @@ static void VSBootstrapMain(void) {
     // so the app runs fully unmodified on its real state instead of half-isolated
     // (split keychain over a shared filesystem is a state nobody has tested).
     if (!VSSafeModeActive) {
+        // Per-layer bisect (Diagnostics > "Test de couches"), read once here. A
+        // failure that has survived several fixes is a failure nobody has localised;
+        // switching one layer off and retrying the broken flow names the guilty layer
+        // in one build instead of costing one guess per build. Empty in normal use.
+        NSSet<NSString *> *off = [log disabledLayers];
+        if (off.count)
+            VSLogW(@"boot", @"BISECT: layer(s) disabled by request -> %@",
+                   [off.allObjects componentsJoinedByString:@", "]);
+
         BOOL home = [VSHookHome installForContainerRoot:active.rootPath];
         [log breadcrumb:VSBootStepHomeHooked
                    note:(home ? [NSString stringWithFormat:@"HOME -> %@", active.rootPath]
                               : @"HOME install refused — running unmodified")];
         if (!home) VSLogE(@"boot", @"layer 1 (HOME) did not install — containers are NOT isolated");
 
-        BOOL keys = home ? [VSHookKeychain installForContainerID:active.cid] : NO;
+        BOOL wantKeys = ![off containsObject:VSLayerKeychain];
+        BOOL keys = (home && wantKeys) ? [VSHookKeychain installForContainerID:active.cid] : NO;
         [log breadcrumb:VSBootStepKeychainHooked
                    note:(keys ? [NSString stringWithFormat:@"keychain ns=%@",
                                  [VSHookKeychain namespacePrefix]]
-                              : (home ? @"keychain install refused" : @"skipped (HOME refused)"))];
-        if (home && !keys)
+                              : (!wantKeys ? @"skipped (bisect)"
+                                           : (home ? @"keychain install refused"
+                                                   : @"skipped (HOME refused)")))];
+        if (home && wantKeys && !keys)
             VSLogE(@"boot", @"layer 2 (keychain) did not install — sessions may leak between containers");
 
         // Layer 3: cfprefsd is out-of-process, so HOME redirect isolates none of
         // Instagram's per-account preferences (saved logins, current-user hint).
-        BOOL defs = home ? [VSHookDefaults installForContainerID:active.cid] : NO;
+        BOOL wantDefs = ![off containsObject:VSLayerDefaults];
+        BOOL defs = (home && wantDefs) ? [VSHookDefaults installForContainerID:active.cid] : NO;
         [log breadcrumb:VSBootStepDefaultsHooked
                    note:(defs ? @"defaults isolated"
-                              : (home ? @"defaults install refused" : @"skipped (HOME refused)"))];
-        if (home && !defs)
+                              : (!wantDefs ? @"skipped (bisect)"
+                                           : (home ? @"defaults install refused"
+                                                   : @"skipped (HOME refused)")))];
+        if (home && wantDefs && !defs)
             VSLogE(@"boot", @"layer 3 (defaults) did not install — per-account prefs may leak between containers");
 
         // Layer 4: the shared cookie jar is likewise process-wide; without this a
-        // web-view sessionid written by one container is visible to the next.
-        BOOL cook = home ? [VSHookCookies installForContainerID:active.cid] : NO;
+        // web-view sessionid written by one container is visible to the next. The jar
+        // is an overlay kept coherent with CFNetwork's own store in both directions —
+        // see VSHookCookies.h; a shadow jar silently broke X-CSRFToken.
+        BOOL wantCook = ![off containsObject:VSLayerCookies];
+        BOOL cook = (home && wantCook) ? [VSHookCookies installForContainerID:active.cid] : NO;
         [log breadcrumb:VSBootStepCookiesHooked
                    note:(cook ? @"cookies isolated"
-                              : (home ? @"cookies install refused" : @"skipped (HOME refused)"))];
-        if (home && !cook)
+                              : (!wantCook ? @"skipped (bisect)"
+                                           : (home ? @"cookies install refused"
+                                                   : @"skipped (HOME refused)")))];
+        if (home && wantCook && !cook)
             VSLogE(@"boot", @"layer 4 (cookies) did not install — web sessions may leak between containers");
 
         // Layer 4b (WebKit): a WKWebView keeps its cookies and localStorage in an
@@ -168,11 +189,14 @@ static void VSBootstrapMain(void) {
         // to project, and spoofing a lone real account's device would be pointless
         // and inconsistent. Order: device (fingerprint sources), then location
         // (GPS), then locale (clock/formatting) — the full identity block.
-        BOOL dev = home ? [VSHookDevice installWithIdentity:active.identity] : NO;
+        BOOL wantDev = ![off containsObject:VSLayerDevice];
+        BOOL dev = (home && wantDev) ? [VSHookDevice installWithIdentity:active.identity] : NO;
         [log breadcrumb:VSBootStepDeviceHooked
                    note:(dev ? @"device identity spoofed"
-                              : (home ? @"device install refused" : @"skipped (HOME refused)"))];
-        if (home && !dev)
+                              : (!wantDev ? @"skipped (bisect)"
+                                          : (home ? @"device install refused"
+                                                  : @"skipped (HOME refused)")))];
+        if (home && wantDev && !dev)
             VSLogE(@"boot", @"layer 5 (device) did not install — model/IDFV/serial are the real device's");
 
         // Layer 6 (fake GPS): drive CoreLocation to the container's chosen city.
@@ -180,17 +204,23 @@ static void VSBootstrapMain(void) {
         // location, which is the default — so this is a no-op until the user
         // pins a location. Between device and locale so the whole identity block
         // (fingerprint → position → clock/formatting) lands together.
-        BOOL gps = home ? [VSHookLocation installForContainer:active] : NO;
+        BOOL wantGPS = ![off containsObject:VSLayerLocation];
+        BOOL gps = (home && wantGPS) ? [VSHookLocation installForContainer:active] : NO;
         [log breadcrumb:VSBootStepLocationHooked
                    note:(gps ? @"location ready"
-                              : (home ? @"location install refused" : @"skipped (HOME refused)"))];
-        if (home && !gps)
+                              : (!wantGPS ? @"skipped (bisect)"
+                                          : (home ? @"location install refused"
+                                                  : @"skipped (HOME refused)")))];
+        if (home && wantGPS && !gps)
             VSLogE(@"boot", @"layer 6 (location) did not install — real GPS position is exposed");
 
-        BOOL loc = home ? [VSHookLocale installWithIdentity:active.identity] : NO;
+        BOOL wantLoc = ![off containsObject:VSLayerLocale];
+        BOOL loc = (home && wantLoc) ? [VSHookLocale installWithIdentity:active.identity] : NO;
         [log breadcrumb:VSBootStepLocaleHooked
                    note:(loc ? @"locale/timezone aligned"
-                              : (home ? @"locale install refused" : @"skipped (HOME refused)"))];
+                              : (!wantLoc ? @"skipped (bisect)"
+                                          : (home ? @"locale install refused"
+                                                  : @"skipped (HOME refused)")))];
 
         // Layer 7 (image cloak): hide our own dylib from the loaded-image walk.
         // Installed LAST — after every fishhook rebind above — because it rebinds
@@ -209,6 +239,21 @@ static void VSBootstrapMain(void) {
             // crash risk during signup. Consistency beats stealth until the full
             // quartet can be hooked safely.
             VSLogI(@"boot", @"image cloak: DISABLED — image list left genuine (consistency > stealth)");
+        }
+
+        // Layer 8 (HTTP probe): log-only, and the reason this build can be the last
+        // guess. It records "METHOD path -> status" for every NSURLSession task, so a
+        // step that hangs is either a request with no answer or an answer that was
+        // refused — a fact, where until now the journal held neither. Not gated on
+        // HOME (it isolates nothing) and installed last so nothing it swizzles can
+        // interfere with a rebind above. Skipped in safe mode with everything else.
+        // Paths and status codes only: no header, no body, no cookie ever recorded.
+        BOOL wantNet = ![off containsObject:VSLayerNetwork];
+        if (wantNet) {
+            BOOL net = [VSHookNetwork install];
+            VSLogI(@"boot", @"layer 8 (HTTP probe): %@", net ? @"active" : @"inactive");
+        } else {
+            VSLogW(@"boot", @"layer 8 (HTTP probe): skipped (bisect) — network activity will not be journalled");
         }
     } else {
         [log breadcrumb:VSBootStepHomeHooked note:@"skipped (safe mode)"];

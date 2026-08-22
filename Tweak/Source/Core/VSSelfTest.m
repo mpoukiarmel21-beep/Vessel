@@ -16,6 +16,7 @@
 #import "../Hooks/VSHookLocation.h"
 #import "../Hooks/VSHookLocale.h"
 #import "../Hooks/VSHookImage.h"
+#import "../Hooks/VSHookNetwork.h"
 #import <UIKit/UIKit.h>
 #import <math.h>
 
@@ -267,14 +268,36 @@ static void VSTestIsolation(void) {
     NSString *l1 = [VSHookHome firstLeak];
     VSCheck(l1 == nil, @"isolation/layer1-filesystem", l1);
 
-    NSString *l2 = [VSHookKeychain firstLeak];
-    VSCheck(l2 == nil, @"isolation/layer2-keychain", l2);
+    // A layer switched off from Diagnostics > "Test de couches" is absent on purpose:
+    // it is a note, not a failure, or a bisect run would drown the report in expected
+    // FAILs and hide the one result the run exists to produce.
+    VSLog *vlog = VSLog.shared;
+    #define VSSkipped(k, name) \
+        ([vlog isLayerDisabled:(k)] ? (VSNote(@name ": désactivée (bisect) — non testée"), YES) : NO)
 
-    NSString *l3 = [VSHookDefaults firstLeak];
-    VSCheck(l3 == nil, @"isolation/layer3-defaults", l3);
+    if (!VSSkipped(VSLayerKeychain, "isolation/layer2-keychain")) {
+        NSString *l2 = [VSHookKeychain firstLeak];
+        VSCheck(l2 == nil, @"isolation/layer2-keychain", l2);
+    }
 
-    NSString *l4 = [VSHookCookies firstLeak];
-    VSCheck(l4 == nil, @"isolation/layer4-cookies", l4);
+    if (!VSSkipped(VSLayerDefaults, "isolation/layer3-defaults")) {
+        NSString *l3 = [VSHookDefaults firstLeak];
+        VSCheck(l3 == nil, @"isolation/layer3-defaults", l3);
+    }
+
+    if (!VSSkipped(VSLayerCookies, "isolation/layer4-cookies")) {
+        NSString *l4 = [VSHookCookies firstLeak];
+        VSCheck(l4 == nil, @"isolation/layer4-cookies", l4);
+
+        // Reported separately from layer4-cookies even though -firstLeak already ends
+        // with it: this is the direction that decides whether Instagram can build a
+        // valid X-CSRFToken, so it has to be legible as its own line in the report
+        // rather than hidden behind a generic layer-4 pass.
+        NSString *l4c = [VSHookCookies coherenceLeak];
+        VSCheck(l4c == nil, @"isolation/layer4-cookies-cfnetwork", l4c);
+        VSNote([@"isolation/layer4-cookies-cfnetwork: " stringByAppendingString:
+                [VSHookCookies storagePlacementDescription]]);
+    }
 
     // Layer 4b is allowed to be absent: on a pre-iOS 17 OS (or if WebKit is missing)
     // it installs nothing by design and the app stays on the shared web store — a
@@ -287,14 +310,21 @@ static void VSTestIsolation(void) {
         VSNote(@"isolation/layer4b-webkit: not installed (shared web store) — non-fatal");
     }
 
-    NSString *l5 = [VSHookDevice firstLeak];
-    VSCheck(l5 == nil, @"identity/device-hook", l5);
+    if (!VSSkipped(VSLayerDevice, "identity/device-hook")) {
+        NSString *l5 = [VSHookDevice firstLeak];
+        VSCheck(l5 == nil, @"identity/device-hook", l5);
+    }
 
-    NSString *l6 = [VSHookLocale firstLeak];
-    VSCheck(l6 == nil, @"identity/locale-hook", l6);
+    if (!VSSkipped(VSLayerLocale, "identity/locale-hook")) {
+        NSString *l6 = [VSHookLocale firstLeak];
+        VSCheck(l6 == nil, @"identity/locale-hook", l6);
+    }
 
-    NSString *l7 = [VSHookLocation firstLeak];
-    VSCheck(l7 == nil, @"identity/location-hook", l7);
+    if (!VSSkipped(VSLayerLocation, "identity/location-hook")) {
+        NSString *l7 = [VSHookLocation firstLeak];
+        VSCheck(l7 == nil, @"identity/location-hook", l7);
+    }
+    #undef VSSkipped
 
     // Image cloak is anti-detection, not isolation, and is not gated on HOME; if it
     // could not install (dladdr/dlsym/rebind miss) the image list is simply genuine,
@@ -306,6 +336,14 @@ static void VSTestIsolation(void) {
     } else {
         VSNote(@"anti-detect/image-cloak: not active — non-fatal");
     }
+
+    // The HTTP probe is instrumentation, never a requirement: it is reported so the
+    // export says whether network activity was being journalled at all, and a "not
+    // active" line explains an otherwise silent journal instead of leaving the next
+    // reader to wonder.
+    VSNote([NSString stringWithFormat:@"diag/http-probe: %@",
+            [VSHookNetwork isInstalled] ? @"active (méthode + chemin + code)"
+                                        : @"not active — no network line will appear"]);
 }
 
 #pragma mark - Report

@@ -21,6 +21,16 @@
 //  Every replacement falls back to the original for any storage that is not the
 //  shared one and no-ops safely if the layer is not installed, so the failure mode
 //  is "cookies not isolated", never a crash inside Instagram's networking.
+//
+//  Coherence with CFNetwork (added after the signup-hang investigation). The jar is
+//  an overlay, NOT a shadow. CFNetwork absorbs Set-Cookie and emits the Cookie:
+//  header through the CF-level store underneath NSHTTPCookieStorage and never calls
+//  the ObjC methods swizzled here, so a jar that only intercepted the ObjC surface
+//  split the session in two: the server's csrftoken went into the CF store while
+//  Instagram read ours, found nothing, and sent every signed POST with an empty
+//  X-CSRFToken — which is precisely a signup step whose "Next" silently does
+//  nothing. Reads therefore absorb from the real store and writes are mirrored into
+//  it, so there is one session, visible from both sides.
 
 #import <Foundation/Foundation.h>
 
@@ -36,8 +46,17 @@
 /// Layer-4 verification for VSSelfTest: sets a uniquely-named cookie through the
 /// shared storage, proves it reads back through -cookies and -cookiesForURL:,
 /// proves it physically landed in this container's jar on disk (and therefore not
-/// in the shared store), deletes it, proves it is gone, then cleans up. nil means
-/// the layer holds.
+/// in the shared store), deletes it, proves it is gone, then cleans up. Finishes
+/// with -coherenceLeak. nil means the layer holds.
 + (NSString *)firstLeak;
+
+/// Crosses the ObjC/CFNetwork boundary in both directions: a cookie set by the app
+/// must reach the store CFNetwork sends from, and a cookie stored by the network
+/// stack must be visible to the app. The second direction is the csrftoken path, so
+/// a failure here is a signup blocker rather than a cosmetic isolation gap.
++ (NSString *)coherenceLeak;
+
+/// Which side of the cookie state exists on disk, for the journal. Paths only.
++ (NSString *)storagePlacementDescription;
 
 @end

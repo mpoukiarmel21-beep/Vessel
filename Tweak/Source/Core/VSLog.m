@@ -18,6 +18,31 @@ static NSString *const kCrashFile   = @"crash-pending.log";
 static NSString *const kStreakKey   = @"crashStreak";
 static NSString *const kSinkKey     = @"remoteSinkEnabled";
 static NSString *const kTopicKey    = @"remoteTopic";
+static NSString *const kOffLayersKey = @"disabledLayers";
+
+NSString *const VSLayerKeychain = @"keychain";
+NSString *const VSLayerDefaults = @"defaults";
+NSString *const VSLayerCookies  = @"cookies";
+NSString *const VSLayerDevice   = @"device";
+NSString *const VSLayerLocation = @"location";
+NSString *const VSLayerLocale   = @"locale";
+NSString *const VSLayerNetwork  = @"network";
+
+NSArray<NSString *> *VSBisectKeys(void) {
+    return @[ VSLayerKeychain, VSLayerDefaults, VSLayerCookies,
+              VSLayerDevice, VSLayerLocation, VSLayerLocale, VSLayerNetwork ];
+}
+
+NSString *VSBisectLabel(NSString *key) {
+    if ([key isEqualToString:VSLayerKeychain]) return @"2 · Trousseau";
+    if ([key isEqualToString:VSLayerDefaults]) return @"3 · Préférences";
+    if ([key isEqualToString:VSLayerCookies])  return @"4 · Cookies";
+    if ([key isEqualToString:VSLayerDevice])   return @"5 · Identité appareil";
+    if ([key isEqualToString:VSLayerLocation]) return @"6 · Position GPS";
+    if ([key isEqualToString:VSLayerLocale])   return @"6b · Langue / fuseau";
+    if ([key isEqualToString:VSLayerNetwork])  return @"8 · Sonde réseau (journal)";
+    return key ?: @"—";
+}
 
 // Written from signal handlers, so it must stay async-signal-safe-ish: plain
 // C globals only, no ObjC, no malloc on the crash path.
@@ -37,8 +62,10 @@ static void VSTimestamp(char *out, size_t cap) {
              tmv.tm_hour, tmv.tm_min, tmv.tm_sec, (int)(tv.tv_usec / 1000));
 }
 
-NSString *VSRedact(NSString *line) {
-    if (line.length == 0) return line;
+/// The key names whose presence anywhere in a line means the line's payload may
+/// carry a credential. Matching is on the name, so the name itself is safe to
+/// report back — and reporting it is what keeps a redacted line diagnosable.
+static NSArray<NSString *> *VSRedactNeedles(void) {
     static NSArray<NSString *> *needles = nil;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
@@ -47,20 +74,74 @@ NSString *VSRedact(NSString *line) {
                      @"secret", @"x-mid", @"ig-u-", @"claim", @"apikey",
                      @"api_key", @"access_token", @"refresh" ];
     });
-    NSString *low = line.lowercaseString;
-    for (NSString *n in needles) {
-        if ([low containsString:n]) return @"<redacted: sensitive key matched>";
-    }
-    // Long opaque blobs are almost always credentials; keep only a length hint.
-    static NSRegularExpression *blob = nil;
-    static dispatch_once_t once2;
-    dispatch_once(&once2, ^{
-        blob = [NSRegularExpression regularExpressionWithPattern:@"[A-Za-z0-9+/=_-]{40,}"
-                                                        options:0 error:nil];
+    return needles;
+}
+
+/// Splits "HH:MM:SS.mmm LVL [tag] " off the front of a line so redaction can keep
+/// it. Without this the whole line went, module tag included, and a journal full of
+/// anonymous "<redacted>" lines is a journal that cannot be read — which is exactly
+/// how three builds went by without the cookie layer ever being suspected.
+static NSRegularExpression *VSLinePrefixRE(void) {
+    static NSRegularExpression *re = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        re = [NSRegularExpression regularExpressionWithPattern:
+              @"^(\\d{2}:\\d{2}:\\d{2}\\.\\d{3} [A-Z]{3} \\[[^\\]]*\\] )([\\s\\S]*)$"
+                                                      options:0 error:nil];
     });
-    return [blob stringByReplacingMatchesInString:line options:0
-                                            range:NSMakeRange(0, line.length)
-                                     withTemplate:@"<blob>"];
+    return re;
+}
+
+static NSRegularExpression *VSBlobRE(void) {
+    static NSRegularExpression *re = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        re = [NSRegularExpression regularExpressionWithPattern:@"[A-Za-z0-9+/=_-]{40,}"
+                                                      options:0 error:nil];
+    });
+    return re;
+}
+
+/// Long opaque runs are almost always credentials, so they collapse to a length
+/// hint. A filesystem path is not a credential though, and blobbing paths is how a
+/// journal ends up saying "HOME -> <blob>" and telling nobody anything — so tokens
+/// containing a slash are left alone. Nothing in this project logs a URL with a
+/// query string, which is the only case where that would be too generous.
+static NSString *VSBlobbed(NSString *body) {
+    NSArray<NSString *> *tokens = [body componentsSeparatedByString:@" "];
+    NSMutableArray<NSString *> *out = [NSMutableArray arrayWithCapacity:tokens.count];
+    for (NSString *t in tokens) {
+        if (t.length < 40 || [t containsString:@"/"]) { [out addObject:t]; continue; }
+        [out addObject:[VSBlobRE() stringByReplacingMatchesInString:t options:0
+                                                             range:NSMakeRange(0, t.length)
+                                                      withTemplate:@"<blob>"]];
+    }
+    return [out componentsJoinedByString:@" "];
+}
+
+NSString *VSRedact(NSString *line) {
+    if (line.length == 0) return line;
+
+    NSString *prefix = @"", *body = line;
+    NSTextCheckingResult *m = [VSLinePrefixRE() firstMatchInString:line options:0
+                                                            range:NSMakeRange(0, line.length)];
+    if (m && m.numberOfRanges == 3) {
+        prefix = [line substringWithRange:[m rangeAtIndex:1]];
+        body   = [line substringWithRange:[m rangeAtIndex:2]];
+    }
+
+    NSString *low = body.lowercaseString;
+    // A body opening with "keys:" is a contract from the call site: it names keys,
+    // cookies, files or paths and carries no value. Needle matching is skipped for
+    // it, because otherwise a line whose whole purpose is to report WHICH cookie
+    // arrived is destroyed by the word "cookie" appearing in it — the exact reason
+    // the cookie layer's own install and absorb lines came out anonymous.
+    if (![body hasPrefix:@"keys:"])
+        for (NSString *n in VSRedactNeedles())
+            if ([low containsString:n])
+                return [prefix stringByAppendingFormat:@"<redacted: matched key name '%@'>", n];
+
+    return [prefix stringByAppendingString:VSBlobbed(body)];
 }
 
 @interface VSLog () {
@@ -275,6 +356,36 @@ static void VSExceptionHandler(NSException *e) {
     [self log:VSLogLevelInfo tag:@"boot" fmt:@"boot confirmed healthy, streak reset"];
 }
 
+#pragma mark - Layer bisect
+
+/// A per-layer off switch, persisted in diag.plist — i.e. outside every container,
+/// so "Tout réinitialiser" cannot clear it and a container that will not work can
+/// still be diagnosed. It exists because a bug that survives several blind fixes is
+/// a bug nobody has localised: turning one isolation layer off and retrying the
+/// broken flow names the guilty layer in a single build instead of a guess per
+/// build. Read once per boot, before any hook installs.
+- (NSSet<NSString *> *)disabledLayers {
+    id raw = _prefs[kOffLayersKey];
+    if (![raw isKindOfClass:NSArray.class]) return [NSSet set];
+    NSMutableSet *s = [NSMutableSet set];
+    for (id e in (NSArray *)raw) if ([e isKindOfClass:NSString.class]) [s addObject:e];
+    return s;
+}
+
+- (BOOL)isLayerDisabled:(NSString *)key {
+    return key.length > 0 && [[self disabledLayers] containsObject:key];
+}
+
+- (void)setLayer:(NSString *)key disabled:(BOOL)off {
+    if (key.length == 0) return;
+    NSMutableSet *s = [[self disabledLayers] mutableCopy];
+    if (off) [s addObject:key]; else [s removeObject:key];
+    _prefs[kOffLayersKey] = s.allObjects;
+    [self savePrefs];
+    [self log:VSLogLevelWarn tag:@"boot" fmt:@"layer '%@' %@ for the next launch",
+        key, off ? @"DISABLED" : @"re-enabled"];
+}
+
 #pragma mark - Readers
 
 - (NSArray<NSString *> *)recentLines {
@@ -283,8 +394,56 @@ static void VSExceptionHandler(NSException *e) {
     return snap;
 }
 
+/// Keeps the LAST `max` lines of `text`. A journal is read from the end — the
+/// failure is at the bottom — and an export has to stay small enough to paste.
+static NSString *VSTail(NSString *text, NSUInteger max) {
+    NSArray<NSString *> *lines = [text componentsSeparatedByString:@"\n"];
+    if (lines.count <= max) return text;
+    return [[lines subarrayWithRange:NSMakeRange(lines.count - max, max)]
+            componentsJoinedByString:@"\n"];
+}
+
+/// Session log files, oldest first. Same ordering as pruneOldLogs: the name carries
+/// a zero-padding-free epoch, but every stamp has the same digit count for any date
+/// this decade, so a lexicographic sort is chronological.
+- (NSArray<NSString *> *)sessionLogPathsOldestFirst {
+    if (_diagDir.length == 0) return @[];
+    NSArray *all = [NSFileManager.defaultManager contentsOfDirectoryAtPath:_diagDir error:nil];
+    NSMutableArray *logs = [NSMutableArray array];
+    for (NSString *f in all)
+        if ([f hasPrefix:@"session-"]) [logs addObject:f];
+    [logs sortUsingSelector:@selector(compare:)];
+    NSMutableArray *out = [NSMutableArray arrayWithCapacity:logs.count];
+    for (NSString *f in logs) [out addObject:[_diagDir stringByAppendingPathComponent:f]];
+    return out;
+}
+
+/// The CURRENT session, read back from its file rather than from the ring. The ring
+/// holds the last 800 lines only; the file holds everything this session wrote.
 - (NSString *)fullLogText {
-    return [[self recentLines] componentsJoinedByString:@"\n"];
+    NSString *disk = _logFilePath.length
+        ? [NSString stringWithContentsOfFile:_logFilePath encoding:NSUTF8StringEncoding error:NULL]
+        : nil;
+    if (disk.length) return VSTail(disk, 4000);
+    return [[self recentLines] componentsJoinedByString:@"\n"];   // file layer unavailable
+}
+
+/// The session BEFORE this one — which is where a failure the user then relaunched
+/// the app to report actually lives. Without this the Diagnostics export could only
+/// ever show the boot that had just happened, i.e. never the problem: the export the
+/// user sent for the signup hang contained ten seconds of a healthy fresh launch and
+/// nothing else. Returns @"" when there is no earlier session.
+- (NSString *)previousSessionLogText {
+    NSArray<NSString *> *paths = [self sessionLogPathsOldestFirst];
+    NSString *prev = nil;
+    for (NSString *p in paths) {
+        if ([p isEqualToString:_logFilePath]) break;
+        prev = p;                                   // last one before ours
+    }
+    if (prev.length == 0) return @"";
+    NSString *txt = [NSString stringWithContentsOfFile:prev encoding:NSUTF8StringEncoding error:NULL];
+    if (txt.length == 0) return @"";
+    return [NSString stringWithFormat:@"(%@)\n%@", prev.lastPathComponent, VSTail(txt, 2000)];
 }
 
 @end

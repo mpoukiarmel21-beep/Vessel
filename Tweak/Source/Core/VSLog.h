@@ -72,9 +72,43 @@ NSString *VSRedact(NSString *line);
 
 /// Newest-last snapshot of the in-memory ring buffer (for the Diagnostics UI).
 - (NSArray<NSString *> *)recentLines;
+
+/// The whole current session, read back from its file — not the 800-line ring, which
+/// silently drops the beginning of a long session.
 - (NSString *)fullLogText;
 
+/// The session before this one, tail-capped, prefixed with its file name; @"" when
+/// there is none. A user who hits a bug, kills the app and reopens it to export the
+/// journal is asking about the PREVIOUS session, so an export without this can never
+/// show the failure it was collected for.
+- (NSString *)previousSessionLogText;
+
+/// Per-layer off switches for bisecting a failure, persisted in diag.plist (outside
+/// every container, so a reset cannot clear them). Keys are the VSLayer* constants
+/// below. Consulted once per boot, before any hook installs; a change takes effect
+/// on the next launch.
+- (BOOL)isLayerDisabled:(NSString *)key;
+- (void)setLayer:(NSString *)key disabled:(BOOL)off;
+- (NSSet<NSString *> *)disabledLayers;
+
 @end
+
+/// Bisect keys. Layer 1 (HOME) is deliberately absent: everything else is gated on
+/// it, so turning it off is just safe mode, which already has its own trigger.
+extern NSString *const VSLayerKeychain;
+extern NSString *const VSLayerDefaults;
+extern NSString *const VSLayerCookies;
+extern NSString *const VSLayerDevice;
+extern NSString *const VSLayerLocation;
+extern NSString *const VSLayerLocale;
+/// Layer 8 is not an isolation layer at all — it is the log-only HTTP probe. It gets
+/// a switch for the same reason the others do: it must be possible to prove a
+/// symptom is not the instrumentation's fault.
+extern NSString *const VSLayerNetwork;
+
+/// Display order and French labels for the Diagnostics bisect section.
+extern NSArray<NSString *> *VSBisectKeys(void);
+extern NSString *VSBisectLabel(NSString *key);
 
 // The parameter is deliberately named _t and not `tag`: a macro parameter named
 // `tag` is also substituted in the selector keyword `tag:`, expanding

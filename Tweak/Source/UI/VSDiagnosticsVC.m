@@ -5,6 +5,7 @@
 #import "../Core/VSManager.h"
 #import "../Core/VSLog.h"
 #import "../Core/VSSelfTest.h"
+#import "../Hooks/VSHookNetwork.h"
 
 @interface VSDiagnosticsVC ()
 @property (nonatomic, strong) UIStackView *stack;
@@ -14,6 +15,8 @@
 @property (nonatomic, strong) UISwitch *sinkSwitch;
 @property (nonatomic, strong) UIStackView *topicRow;
 @property (nonatomic, strong) UILabel *topicLabel;
+/// One switch per bisectable layer, keyed by the VSLayer* constant.
+@property (nonatomic, strong) NSMutableDictionary<NSString *, UISwitch *> *bisectSwitches;
 @end
 
 @implementation VSDiagnosticsVC
@@ -50,6 +53,7 @@
 
     [self buildStatusSection];
     [self buildRemoteSinkSection];
+    [self buildBisectSection];
     [self buildSelfTestSection];
     [self buildLogSection];
     [self reload];
@@ -163,6 +167,66 @@
     [self addSection:@"Diagnostic à distance" content:col];
 }
 
+#pragma mark - Layer bisect
+
+/// A failure that survives several fixes is a failure nobody has localised. These
+/// switches turn one isolation layer off for the next launch, so retrying the broken
+/// flow names the guilty layer in a single build instead of costing one guess per
+/// build. The state lives in diag.plist, outside every container: "Tout réinitialiser"
+/// cannot clear it, and a container that refuses to work can still be diagnosed.
+/// Layer 1 (fichiers) is absent on purpose — everything else is gated on it, so
+/// turning it off is just safe mode, which already has its own trigger.
+- (void)buildBisectSection {
+    self.bisectSwitches = [NSMutableDictionary dictionary];
+
+    UIStackView *col = [UIStackView new];
+    col.axis = UILayoutConstraintAxisVertical;
+    col.spacing = 12;
+
+    UILabel *desc = [UILabel new];
+    desc.numberOfLines = 0;
+    desc.font = [VSTheme fontCaption];
+    desc.textColor = [VSTheme secondaryText];
+    desc.text = @"Si une action d'Instagram échoue, désactive une couche puis relance "
+                 "l'app et réessaie : la couche fautive est nommée en un seul essai. "
+                 "Tout doit rester activé en usage normal.";
+    [col addArrangedSubview:desc];
+
+    NSArray<NSString *> *keys = VSBisectKeys();
+    for (NSString *key in keys) {
+        UIStackView *row = [UIStackView new];
+        row.axis = UILayoutConstraintAxisHorizontal;
+        row.alignment = UIStackViewAlignmentCenter;
+        row.spacing = 10;
+
+        UILabel *title = [UILabel new];
+        title.numberOfLines = 0;
+        title.font = [VSTheme fontBody];
+        title.textColor = [VSTheme primaryText];
+        title.text = VSBisectLabel(key);
+        [title setContentHuggingPriority:UILayoutPriorityDefaultLow
+                                forAxis:UILayoutConstraintAxisHorizontal];
+
+        UISwitch *sw = [UISwitch new];
+        // ON = couche active. The stored flag is the inverse (disabled), so the
+        // control reads the way the user thinks about it.
+        sw.on = ![VSLog.shared isLayerDisabled:key];
+        [sw setContentHuggingPriority:UILayoutPriorityRequired
+                             forAxis:UILayoutConstraintAxisHorizontal];
+        [sw setContentCompressionResistancePriority:UILayoutPriorityRequired
+                                           forAxis:UILayoutConstraintAxisHorizontal];
+        [sw addTarget:self action:@selector(bisectToggled:)
+     forControlEvents:UIControlEventValueChanged];
+        self.bisectSwitches[key] = sw;
+
+        [row addArrangedSubview:title];
+        [row addArrangedSubview:sw];
+        [col addArrangedSubview:row];
+    }
+
+    [self addSection:@"Test de couches" content:col];
+}
+
 #pragma mark - Self-test
 
 - (void)buildSelfTestSection {
@@ -208,9 +272,14 @@
 - (void)reload {
     VSManager *m = VSManager.shared;
     VSLog *log = VSLog.shared;
+    // The pending list is the one line to read while a step is stuck: open this
+    // screen without closing Instagram and the request the app is waiting on is
+    // named here, live. Empty means the app is not waiting on the network at all.
     self.statusLabel.text = [NSString stringWithFormat:
-        @"Lancements : %ld\nÉchecs consécutifs : %ld\nConteneur actif : %@",
-        (long)m.bootCount, (long)[log crashStreak], m.active.name ?: @"—"];
+        @"Lancements : %ld\nÉchecs consécutifs : %ld\nConteneur actif : %@\n"
+        @"Requêtes en attente : %@",
+        (long)m.bootCount, (long)[log crashStreak], m.active.name ?: @"—",
+        [VSHookNetwork pendingDescription]];
 
     NSString *report = [VSSelfTest lastReport];
     self.selfTestLabel.text = report.length ? report : @"Aucun rapport pour l'instant.";
@@ -222,6 +291,9 @@
 
     self.sinkSwitch.on = log.remoteSinkEnabled;
     [self refreshTopicRow];
+
+    for (NSString *key in self.bisectSwitches)
+        self.bisectSwitches[key].on = ![log isLayerDisabled:key];
 }
 
 - (void)refreshTopicRow {
@@ -244,6 +316,20 @@
     VSLogI(@"diag", @"remote sink %@ by user", sw.on ? @"ENABLED" : @"disabled");
     [self reload];
     if (sw.on) [VSTheme hapticSuccess]; else [VSTheme hapticTap];
+}
+
+/// Persists the new state and tells the user it lands on the next launch: the
+/// switches are read once per boot, before any hook installs, so flipping one
+/// mid-session cannot uninstall a rebind that is already in place.
+- (void)bisectToggled:(UISwitch *)sw {
+    NSString *key = nil;
+    for (NSString *k in self.bisectSwitches)
+        if (self.bisectSwitches[k] == sw) { key = k; break; }
+    if (key.length == 0) return;
+
+    [VSLog.shared setLayer:key disabled:!sw.on];
+    [VSTheme hapticTap];
+    [self toast:sw.on ? @"Réactivée — relance l'app" : @"Désactivée — relance l'app"];
 }
 
 - (void)copyTopic {
@@ -274,6 +360,8 @@
 
 /// The whole log, self-test report first, every line passed through VSRedact so
 /// no cookie/token/coordinate can leave the device even via a manual export.
+/// The PREVIOUS session comes before the current one: a bug is reported after the
+/// app has been relaunched, so that block is usually the only one that contains it.
 - (NSString *)redactedFullLog {
     NSMutableArray<NSString *> *out = [NSMutableArray array];
     NSString *report = [VSSelfTest lastReport];
@@ -282,7 +370,16 @@
         [out addObject:report];
         [out addObject:@""];
     }
-    [out addObject:@"=== JOURNAL ==="];
+
+    NSString *prev = [VSLog.shared previousSessionLogText] ?: @"";
+    if (prev.length) {
+        [out addObject:@"=== SESSION PRÉCÉDENTE ==="];
+        for (NSString *line in [prev componentsSeparatedByString:@"\n"])
+            [out addObject:VSRedact(line)];
+        [out addObject:@""];
+    }
+
+    [out addObject:@"=== JOURNAL (SESSION ACTUELLE) ==="];
     NSString *full = [VSLog.shared fullLogText] ?: @"";
     for (NSString *line in [full componentsSeparatedByString:@"\n"])
         [out addObject:VSRedact(line)];

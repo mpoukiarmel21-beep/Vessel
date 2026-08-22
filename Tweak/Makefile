@@ -103,7 +103,18 @@ VESSEL_PHASE8 = \
 	Source/Hooks/VSHookWebKit.m \
 	Source/Hooks/VSHookImage.m
 
-libmedia_support_FILES = $(VESSEL_PHASE1) $(VESSEL_PHASE2) $(VESSEL_PHASE3) $(VESSEL_PHASE4) $(VESSEL_PHASE5) $(VESSEL_PHASE6) $(VESSEL_PHASE7) $(VESSEL_PHASE8)
+# Phase 9 : instrumentation. VSHookNetwork est une SONDE, pas une couche
+# d'isolation : elle ne change aucun comportement (chaque remplacement appelle
+# l'original, le completion handler de l'app recoit ses arguments intacts) et
+# n'enregistre que « METHODE chemin -> code HTTP ». Elle existe parce qu'un blocage
+# d'etape n'etait visible nulle part : le watchdog ne detecte qu'un gel du thread
+# principal, or l'UI reste fluide. Une requete sans reponse, ou une reponse refusee,
+# devient un fait dans le journal au lieu d'une hypothese. Jamais d'en-tete, de
+# corps, de cookie ni de chaine de requete.
+VESSEL_PHASE9 = \
+	Source/Hooks/VSHookNetwork.m
+
+libmedia_support_FILES = $(VESSEL_PHASE1) $(VESSEL_PHASE2) $(VESSEL_PHASE3) $(VESSEL_PHASE4) $(VESSEL_PHASE5) $(VESSEL_PHASE6) $(VESSEL_PHASE7) $(VESSEL_PHASE8) $(VESSEL_PHASE9)
 
 libmedia_support_CFLAGS = -fobjc-arc \
 	-I$(THEOS_PROJECT_DIR)/Source \
